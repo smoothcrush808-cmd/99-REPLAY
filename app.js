@@ -272,16 +272,33 @@ function cutLen() {
   if (!blindOn()) return S.bars.length;
   return indexAtOrBefore(R.now + KST - sec()) + 1;
 }
+// 화면 범위 정하기: setData로 봉 수가 바뀐 직후엔 차트가 바로 준 범위를 버리고 오른쪽 끝에 붙는다
+// (lightweight-charts 5.1) → 다음 프레임에 한 번 더 넣고, 그 사이엔 옆 달 읽기를 멈춘다(끝에 붙은 순간을 보고 읽지 않게)
+let rangeTok = 0, settling = false, pendingRange = null;
+// 지금 범위 (프레임을 기다리는 범위가 있으면 그것)
+const curRange = () => (settling && pendingRange ? { ...pendingRange } : ts.getVisibleLogicalRange());
+function setRange(r) {
+  const tok = ++rangeTok;
+  settling = true; pendingRange = r;
+  ts.setVisibleLogicalRange(r);
+  requestAnimationFrame(() => {
+    if (tok !== rangeTok) return;
+    ts.setVisibleLogicalRange(r);
+    requestAnimationFrame(() => { if (tok === rangeTok) { settling = false; pendingRange = null; checkEdges(); } });
+  });
+}
+
 // 몇 봉만 늘어난 경우는 update로 (리플레이 넘기기가 가볍도록)
-function pushSeries(force = false) {
+// keep: 같은 봉 묶음을 자르는 선만 바뀔 때(블라인드 켜기/끄기·리플레이 시작/끝) 보던 자리를 그대로 둔다.
+// 새 달을 읽어 바꿀 때는 부르는 쪽이 자리를 정하므로 keep을 쓰지 않는다 (옛 자리가 이동을 덮어씀)
+function pushSeries(force = false, keep = false) {
   const n = cutLen();
   if (!force && shownSrc === S.bars && shownLen > 0 && n >= shownLen && n - shownLen <= 60) {
     for (let i = shownLen; i < n; i++) series.update(S.bars[i]);
   } else {
-    // 통째로 바꾸면 차트가 오른쪽 끝으로 붙어 버리므로 보던 자리를 되돌린다
-    const r = ts.getVisibleLogicalRange();
+    const r = keep ? curRange() : null;
     series.setData(n === S.bars.length ? S.bars : S.bars.slice(0, n));
-    if (r) ts.setVisibleLogicalRange(r);
+    if (r) setRange(r);
   }
   shownLen = n; shownSrc = S.bars;
 }
@@ -294,11 +311,11 @@ function setEdges() {
 
 // 데이터를 바꾸되 보던 자리를 유지한다 (shift = 왼쪽에 새로 붙은 봉 수)
 function applyBars(newBars, shift = 0) {
-  const r = ts.getVisibleLogicalRange();
+  const r = curRange();
   S.bars = newBars;
   setEdges();
   pushSeries(true);
-  if (r && S.bars.length) ts.setVisibleLogicalRange({ from: r.from + shift, to: r.to + shift });
+  if (r && S.bars.length) setRange({ from: r.from + shift, to: r.to + shift });
   saveCache();
   refreshAll();
   updateLegend();
@@ -394,6 +411,7 @@ async function loadRight() {
 }
 
 function checkEdges() {
+  if (settling) return; // 범위를 다시 넣는 중 — 끝난 뒤 setRange가 부른다
   const r = ts.getVisibleLogicalRange();
   if (!r || !S.bars.length) return;
   if (r.from < EDGE) loadLeft();
@@ -413,7 +431,7 @@ async function jumpTo(ms, { mark = true, width: w = null, pos = 0.5 } = {}) {
   const s = sec();
   const t = Math.floor(msToChart(ms) / s) * s; // 봉 시작 시각으로 내림 (KST로 민 값 기준이라 1h도 정각)
   if (mark) S.jumpT = t;
-  const width = w || (() => { const r = ts.getVisibleLogicalRange(); return r ? Math.max(40, r.to - r.from) : 160; })();
+  const width = w || (() => { const r = curRange(); return r ? Math.max(40, r.to - r.from) : 160; })();
 
   const inRange = S.bars.length && t >= S.bars[0].time && t <= S.bars[S.bars.length - 1].time;
   if (!inRange) {
@@ -441,7 +459,7 @@ async function jumpTo(ms, { mark = true, width: w = null, pos = 0.5 } = {}) {
     }
   }
   const idx = indexAtOrBefore(t);
-  ts.setVisibleLogicalRange({ from: idx - width * pos, to: idx + width * (1 - pos) });
+  setRange({ from: idx - width * pos, to: idx + width * (1 - pos) });
   refreshAll();
   updateLegend();
   setTimeout(checkEdges, 0);
@@ -498,7 +516,7 @@ const barX = utc => timeToX(Math.floor((utc + KST) / sec()) * sec());
 // centerMs를 주면 그 시각으로 (북마크), 아니면 지금 보던 시각을 유지
 function switchInterval(iv, { centerMs = null, width = null } = {}) {
   if (iv === S.iv || !IVS[iv]) return;
-  const r = ts.getVisibleLogicalRange();
+  const r = curRange();
   const wasLatest = S.atLatest && r && r.to >= shownLen - 3;
   const centerT = r && S.bars.length ? logicalToTime((r.from + r.to) / 2) : null;
 
@@ -586,27 +604,75 @@ function setVault(posts, trades, source) {
 }
 
 // 매매 요약 (가격이 있는 사건만으로 — 비율 가중 같은 가정은 넣지 않는다)
+// 매매 데이터는 setVault 뒤로 바뀌지 않으니 매매마다 한 번만 계산 (그릴 때마다 부른다)
+const basicsMemo = new WeakMap();
 function tradeBasics(tr) {
+  if (!basicsMemo.has(tr)) basicsMemo.set(tr, calcBasics(tr));
+  return basicsMemo.get(tr);
+}
+function calcBasics(tr) {
   const entry = tr.events.find(e => e.type === 'entry');
   const exits = tr.events.filter(e => e.type === 'exit');
   const exit = exits[exits.length - 1] || null;
   const dir = tr.side === 'short' ? -1 : 1;
   const ep = entry && Number.isFinite(entry.price) ? entry.price : null;
   const firstStop = tr.events.find(e => e.type === 'stop' && Number.isFinite(e.stop) && (!entry || e.t >= entry.t));
+  const pos = positionPath(tr);
   return {
-    entry, exit, dir, ep,
+    entry, exit, dir, ep, pos,
     result: ep && exit && Number.isFinite(exit.price) ? dir * (exit.price - ep) / ep * 100 : null,
+    // 비중 반영 결과가 계산되면 그것을 대표값으로 (없으면 첫 진입가 → 종료가)
+    wresult: pos && pos.ok && pos.result != null ? pos.result : null,
     firstStop,
     stopDist: ep && firstStop ? Math.abs(firstStop.stop - ep) : null,
     hold: entry && exit ? exit.t - entry.t : null,
   };
 }
-// 「리스크 0%」 칸: 메모에 적혀 있거나, 스탑이 첫 진입가를 넘어 수익 쪽으로 간 경우
-function isRisk0(tr, e, ep) {
-  if (/리스크\s*0/.test(e.note || '')) return true;
-  if (ep == null) return false;
-  return tr.side === 'short' ? e.stop <= ep : e.stop >= ep;
+const mainResult = B => (B.wresult != null ? B.wresult : B.result);
+
+// 비중 반영: 그가 적은 「누적 N%」(cum)로 포지션 크기를 따라가며 평단과 청산분의 가격 변화를 계산한다.
+// 크기를 바꾸는 사건(진입·추가·정리)에 cum·price가 모두 있어야 계산한다 — 하나라도 없으면 이유만 돌려준다(추정하지 않음).
+// 정리 사건의 cum은 정리 뒤 남은 누적, 종료는 0. 정정된 사건(corrected_by)은 뒤 사건이 덮어쓰므로 건너뛴다.
+// result = Σ(청산 크기 × 가격 변화 %) / Σ 청산 크기 — 레버리지는 넣지 않는다(계좌 수익 아님, 01 작업지시)
+function positionPath(tr) {
+  const evs = tr.events.filter(e => !e.corrected_by);
+  if (!evs.some(e => Number.isFinite(e.cum))) return null;
+  const dir = tr.side === 'short' ? -1 : 1;
+  let qty = 0, avg = null, pnl = 0, closed = 0, maxQty = 0;
+  const path = [];
+  for (const e of evs) {
+    if (!['entry', 'add', 'reduce', 'exit'].includes(e.type)) continue;
+    const to = e.type === 'exit' ? 0 : e.cum;
+    const at = `${fmtUtc(e.t, false)} ${EV_LABEL[e.type]}`;
+    if (!Number.isFinite(to)) return { ok: false, why: `${at}에 누적 % 없음` };
+    if (!Number.isFinite(e.price)) return { ok: false, why: `${at}에 가격 없음` };
+    const d = to - qty;
+    if (d > 0) avg = qty > 0 ? (avg * qty + e.price * d) / to : e.price;
+    else if (d < 0) {
+      if (avg == null) return { ok: false, why: `${at}: 진입 전 정리` };
+      pnl += -d * dir * (e.price - avg) / avg * 100;
+      closed += -d;
+    }
+    qty = to; maxQty = Math.max(maxQty, qty);
+    path.push({ t: e.t, qty, avg });
+  }
+  return { ok: true, result: closed ? pnl / closed : null, closed, open: qty, maxQty, path, avg };
 }
+// t 시각의 평단 기준: 그가 적은 평단(avg) → 누적으로 계산한 평단 → 첫 진입가
+function basisAt(tr, t, B) {
+  let b = null;
+  for (const e of tr.events) { if (e.t > t) break; if (Number.isFinite(e.avg) && !e.corrected_by) b = e.avg; }
+  if (b == null && B.pos && B.pos.ok) for (const s of B.pos.path) { if (s.t > t) break; if (s.avg != null) b = s.avg; }
+  return b ?? B.ep;
+}
+// 「리스크 0%」 칸: 메모에 적혀 있거나, 스탑이 평단 기준(위 basisAt)을 넘어 수익 쪽으로 간 경우
+function isRisk0(tr, e, basis) {
+  if (/리스크\s*0/.test(e.note || '')) return true;
+  if (basis == null) return false;
+  return tr.side === 'short' ? e.stop <= basis : e.stop >= basis;
+}
+// BTC가 아닌 매매(PEPE 등, price 없음)는 BTC 차트에 그리지 않는다
+const onChart = tr => !tr.asset || /^BTC/i.test(tr.asset);
 // 보이는 사건인가 (블라인드 중인 매매는 연 사건까지만, 다른 매매는 now 전 사건만)
 function evShown(tr, e) {
   if (!blindOn()) return true;
@@ -614,7 +680,7 @@ function evShown(tr, e) {
   return e.t < R.now;
 }
 function nextTradeOpen(tr) {
-  const i = vault.trades.indexOf(tr), n = vault.trades[i + 1];
+  const n = vault.trades.find(x => x !== tr && onChart(x) && x.events[0].t > tr.events[0].t);
   return n ? n.events[0].t : null;
 }
 // 스탑 계단: 설정·이동 시각부터 다음 이동(또는 종료)까지
@@ -622,14 +688,14 @@ function stopSegs(tr) {
   const evs = tr.events.filter(e => evShown(tr, e));
   const stops = evs.filter(e => e.type === 'stop' && Number.isFinite(e.stop));
   if (!stops.length) return [];
-  const { ep, exit } = tradeBasics(tr);
+  const B = tradeBasics(tr), { exit } = B;
   const closed = exit && evShown(tr, exit);
   const last = tr.events[tr.events.length - 1].t;
   let end = closed ? exit.t : (tr.status === 'closed' && exit ? exit.t : (nextTradeOpen(tr) ?? last + 4 * 3600));
   if (blindOn()) end = Math.min(end, R.now);
   let r0 = false;
   return stops.map((e, i) => {
-    if (isRisk0(tr, e, ep)) r0 = true;
+    if (isRisk0(tr, e, basisAt(tr, e.t, B))) r0 = true;
     const t1 = i + 1 < stops.length ? stops[i + 1].t : end;
     return { t0: e.t, t1: Math.max(e.t, t1), stop: e.stop, risk0: r0, tail: i + 1 === stops.length && !closed };
   });
@@ -694,11 +760,13 @@ const marks = (() => {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
         ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
+        if (Number.isFinite(e.cum)) tag(ctx, x + 8, y - 7, `→누적 ${e.cum}%`, 'rgba(10,14,20,0.75)', sideC);
       } else if (e.type === 'reduce' || e.type === 'tp') {
         if (e.corrected_by) ctx.globalAlpha = 0.45;
         ctx.fillStyle = C.reduce; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        const lab = e.type === 'tp' ? 'TP' : `${e.pct ?? '?'}%${e.corrected_by ? ' 정정됨' : ''}`;
+        const lab = e.type === 'tp' ? 'TP'
+          : `${e.pct != null ? `${e.pct}%` : Number.isFinite(e.cum) ? `→누적 ${e.cum}%` : '?'}${e.corrected_by ? ' 정정됨' : ''}`;
         tag(ctx, x + 7, y - 7, lab, 'rgba(10,14,20,0.75)', C.reduce);
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
@@ -744,6 +812,7 @@ const marks = (() => {
     if (vault.trades.length && r && S.bars.length) {
       const lo = logicalToTime(Math.floor(r.from)) - KST - 86400, hi = logicalToTime(Math.ceil(r.to)) - KST + 86400;
       for (const tr of vault.trades) {
+        if (!onChart(tr)) continue;
         const a = tr.events[0].t, b = Math.max(tr.events[tr.events.length - 1].t, nextTradeOpen(tr) ?? 0);
         if (b < lo || a > hi) continue;
         if (blindOn() && a >= R.now && tr !== R.trade) continue;
@@ -767,6 +836,18 @@ const marks = (() => {
     detached: () => { requestUpdate = () => {}; },
     updateAllViews: () => {},
     paneViews: () => views,
+    // 보이는 구간의 스탑 계단이 화면 밖으로 나가지 않게 가격축 범위에 넣는다
+    autoscaleInfo: (from, to) => {
+      if (!vault.trades.length || !S.bars.length) return null;
+      const lo = logicalToTime(Math.floor(from)) - KST, hi = logicalToTime(Math.ceil(to)) - KST;
+      let mn = Infinity, mx = -Infinity;
+      for (const tr of vault.trades) {
+        if (!onChart(tr) || tr.events[0].t > hi) continue;
+        if (blindOn() && tr !== R.trade && tr.events[0].t >= R.now) continue;
+        for (const s of stopSegs(tr)) if (s.t1 >= lo && s.t0 <= hi) { mn = Math.min(mn, s.stop); mx = Math.max(mx, s.stop); }
+      }
+      return Number.isFinite(mn) ? { priceRange: { minValue: mn, maxValue: mx } } : null;
+    },
   });
 
   return {
@@ -1600,7 +1681,7 @@ $('markBtn').addEventListener('click', () => marks.toggle());
 // MFE/MAE: 진입~종료 사이 1분봉 고가·저가 (첫 진입가 대비)
 async function excursion(tr) {
   const { entry, exit, dir, ep } = tradeBasics(tr);
-  if (!entry || !exit || ep == null) return null;
+  if (!onChart(tr) || !entry || !exit || ep == null) return null;
   const a = entry.t, b = exit.t;
   const months = new Set([ymOf(a + KST), ymOf(b + KST)]);
   const all = klines.months('1m');
@@ -1621,13 +1702,30 @@ function evDetail(e) {
   if (Number.isFinite(e.price)) bits.push(`@ ${fmtPrice(e.price)}`);
   if (e.type === 'reduce' && e.pct != null) bits.push(`${e.pct}%`);
   if (e.type === 'stop' && Number.isFinite(e.stop)) bits.push(`→ ${fmtPrice(e.stop)}`);
+  if (Number.isFinite(e.cum)) bits.push(`누적 ${e.cum}%`);
   if (Number.isFinite(e.quoted)) bits.push(`(글의 숫자 ${e.quoted})`);
+  if (Number.isFinite(e.avg)) bits.push(`(글의 평단 ${e.avg})`);
   return bits.join(' ');
 }
 function postText(id) {
   const p = id && vault.post.get(id);
   if (!p) return '';
   return p.photo ? '📷 사진(내보내기에 없음)' : p.text;
+}
+
+// 결과 줄: 누적(cum)이 다 있으면 비중 반영 값이 대표, 첫 진입가 → 종료가는 참고로
+const resCls = v => (v == null ? 'n' : v >= 0 ? 'u' : 'd');
+const subNote = t => `<span style="color:var(--text-sub);font-size:11px">${t}</span>`;
+function resultRows(tr, B) {
+  if (!onChart(tr)) return `<dt>종목</dt><dd>${esc(tr.asset)} ${subNote('BTC 차트에 그리지 않음 · 가격 없음')}</dd>`;
+  const simple = `<dd><span class="res ${resCls(B.result)}">${fmtPct(B.result)}</span> ${subNote('첫 진입가 → 종료가')}</dd>`;
+  const P = B.pos;
+  if (!P) return `<dt>결과</dt>${simple}`;
+  if (!P.ok) return `<dt>결과</dt>${simple}<dt>비중 반영</dt><dd>— ${subNote(esc(P.why))}</dd>`;
+  const left = P.open > 0 ? ` · 남은 누적 ${P.open}% 종료 기록 없음` : '';
+  return `<dt>결과 (비중 반영)</dt><dd><span class="res ${resCls(P.result)}">${fmtPct(P.result)}</span> ${subNote(`청산분 누적 크기로 가중 · 레버 미반영`)}</dd>
+    <dt>누적</dt><dd>최대 ${P.maxQty}% · 평단 ${P.avg != null ? fmtPrice(P.avg) : '—'}${left}</dd>
+    <dt>참고</dt>${simple}`;
 }
 
 let cardTrade = null;
@@ -1646,19 +1744,21 @@ async function openCard(tr, hitEv = null) {
     <dt>첫 스탑 거리</dt><dd>${B.stopDist != null ? `${fmtPrice(B.stopDist)} (${(B.stopDist / B.ep * 100).toFixed(2)}%)` : '—'}</dd>
     <dt>보유 시간</dt><dd>${B.hold != null ? fmtDur(B.hold) : '종료 기록 없음'}</dd>
     <dt>MFE / MAE</dt><dd id="cardExc">${B.exit ? '계산 중…' : '—'}</dd>
-    <dt>결과</dt><dd><span class="res ${B.result == null ? 'n' : B.result >= 0 ? 'u' : 'd'}">${fmtPct(B.result)}</span> <span style="color:var(--text-sub);font-size:11px">첫 진입가 → 종료가</span></dd>
+    ${resultRows(tr, B)}
   </dl>`;
   const list = evs.map(e => `<li class="${e === hitEv ? 'hit' : ''} ${e.corrected_by ? 'corr' : ''}">
       <div class="eh"><span>${fmtUtc(e.t)}</span><b>${EV_LABEL[e.type]}</b><span>${esc(evDetail(e))}</span>
       ${e.corrected_by ? `<span class="note">정정됨 → ${esc(e.corrected_by)}</span>` : ''}</div>
       ${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}
       ${e.post ? `<div class="tx">${esc(postText(e.post))}</div>` : ''}</li>`).join('');
-  const plans = (tr.plans || []).filter(pl => !blindOn() || pl.t < R.now || pl.t <= R.shownT)
-    .map(pl => `<li><div class="eh"><span>${fmtUtc(pl.t)}</span><b>계획</b><span>(사건 아님)</span></div><div class="tx">${esc(postText(pl.post))}</div></li>`).join('');
+  // 계획·레버리지 변경 메시지 (사건 아님 — 시각순)
+  const side = [...(tr.plans || []).map(x => ({ ...x, k: '계획' })), ...(Array.isArray(tr.size) ? tr.size : []).map(x => ({ ...x, k: '레버·규모' }))]
+    .filter(x => Number.isFinite(x.t) && (!blindOn() || x.t < R.now || x.t <= R.shownT)).sort((a, b) => a.t - b.t);
+  const plans = side.map(pl => `<li><div class="eh"><span>${fmtUtc(pl.t)}</span><b>${pl.k}</b><span>(사건 아님)</span>${pl.note ? `<span class="note">${esc(pl.note)}</span>` : ''}</div>${pl.post ? `<div class="tx">${esc(postText(pl.post))}</div>` : ''}</li>`).join('');
   $('cardBody').innerHTML = `${head}${kv}<div class="label">사건 ${evs.length}${live ? ` / ${tr.events.length}` : ''}</div><ul class="evs">${list}</ul>
-    ${plans ? `<div class="label">계획 메시지</div><ul class="evs">${plans}</ul>` : ''}
+    ${plans ? `<div class="label">계획 · 레버리지 메시지</div><ul class="evs">${plans}</ul>` : ''}
     <div class="row end">
-      ${R.trade ? '' : '<button class="btn" id="cardGo">차트에서 보기</button><button class="btn accent" id="cardReplay">이 매매 리플레이</button>'}
+      ${R.trade || !onChart(tr) ? '' : '<button class="btn" id="cardGo">차트에서 보기</button><button class="btn accent" id="cardReplay">이 매매 리플레이</button>'}
       <button class="btn" data-close>닫기</button>
     </div>`;
   $('cardGo')?.addEventListener('click', () => { closeModal($('cardModal')); showTrade(tr); });
@@ -1744,7 +1844,7 @@ const replay = (() => {
     stopPlay();
     R.trade = null; R.draft = null; R.pick = false;
     bar.hidden = true; wrap.classList.remove('replaying');
-    pushSeries(true);
+    pushSeries(true, true);
     panel.applyBlind();
     refreshAll(); updateLegend();
   }
@@ -1817,7 +1917,7 @@ const replay = (() => {
 
   function toggleBlind() {
     R.blind = !R.blind;
-    pushSeries(true);
+    pushSeries(true, true);
     panel.applyBlind();
     update(); refreshAll(); updateLegend();
   }
@@ -1967,13 +2067,17 @@ function renderTradeList() {
     const li = document.createElement('li');
     const go = document.createElement('button'); go.className = 'trow';
     go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || esc(tr.side)}</span>
-      <span class="res ${B.result == null ? 'n' : B.result >= 0 ? 'u' : 'd'}">${B.result == null ? (tr.status === 'closed' ? '—' : '종료 없음') : fmtPct(B.result)}</span>
+      <span class="res ${resCls(mainResult(B))}" title="${B.wresult != null ? '비중 반영(누적 %)' : '첫 진입가 → 종료가'}">${mainResult(B) == null ? (tr.status === 'closed' ? '—' : '종료 없음') : fmtPct(mainResult(B)) + (B.wresult != null ? '<sup>w</sup>' : '')}</span>
+      ${onChart(tr) ? '' : `<span class="flag">${esc(tr.asset)}</span>`}
       <span class="d">${esc(tr.id)}</span>
       ${tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
       ${tr.confidence === 'low' ? '<span class="flag low">확인 필요</span>' : ''}
       ${n ? `<span class="flag mine">✍ ${n}</span>` : ''}`;
     go.title = '블라인드 리플레이 시작';
-    go.addEventListener('click', () => replay.start(tr));
+    go.addEventListener('click', () => {
+      if (!onChart(tr)) { closeModal($('tradeModal')); openCard(tr); toast(`${tr.asset} 매매는 BTC 차트로 리플레이할 수 없습니다 — 원문만 봅니다`, { ms: 3500 }); return; }
+      replay.start(tr);
+    });
     const see = document.createElement('button'); see.className = 'tbtn'; see.textContent = '보기'; see.title = '원문·요약 보기';
     see.addEventListener('click', () => { closeModal($('tradeModal')); showTrade(tr); openCard(tr); });
     li.append(go, see);
@@ -2237,5 +2341,5 @@ klines.init()
 initVault();
 
 // 디버그·테스트용
-window.__replay = { S, R, vault, chart, series, drawings, bookmarks, answers, replay, panel, jumpTo, switchInterval, wide, klines };
+window.__replay = { S, R, vault, stopSegs, tradeBasics, chart, series, drawings, bookmarks, answers, replay, panel, jumpTo, switchInterval, wide, klines };
 })();

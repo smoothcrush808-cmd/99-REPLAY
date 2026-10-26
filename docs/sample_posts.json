@@ -198,5 +198,69 @@
   "kind": "signal",
   "trade": "S4",
   "photo": false
+ },
+ {
+  "id": "p0026",
+  "t": 1729054800,
+  "text": "[샘플] 숏 누적 10% (10배)",
+  "kind": "signal",
+  "trade": "S5",
+  "photo": false
+ },
+ {
+  "id": "p0027",
+  "t": 1729054860,
+  "text": "[샘플] 스탑 H",
+  "kind": "risk",
+  "trade": "S5",
+  "photo": false
+ },
+ {
+  "id": "p0028",
+  "t": 1729057200,
+  "text": "[샘플] 추가 숏 누적 20%\n평단 67121",
+  "kind": "risk",
+  "trade": "S5",
+  "photo": false
+ },
+ {
+  "id": "p0029",
+  "t": 1729060200,
+  "text": "[샘플] 절반 정리 누적 10%",
+  "kind": "risk",
+  "trade": "S5",
+  "photo": false
+ },
+ {
+  "id": "p0030",
+  "t": 1729060320,
+  "text": "[샘플] 스탑 평단 아래로 I",
+  "kind": "risk",
+  "trade": "S5",
+  "photo": false
+ },
+ {
+  "id": "p0031",
+  "t": 1729060560,
+  "text": "[샘플] 스탑 맞음 종료",
+  "kind": "signal",
+  "trade": "S5",
+  "photo": false
+ },
+ {
+  "id": "p0032",
+  "t": 1729065600,
+  "text": "[샘플] 페페 숏",
+  "kind": "signal",
+  "trade": "S6",
+  "photo": false
+ },
+ {
+  "id": "p0033",
+  "t": 1729069200,
+  "text": "[샘플] 페페 종료",
+  "kind": "signal",
+  "trade": "S6",
+  "photo": false
  }
 ]

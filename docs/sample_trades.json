@@ -175,5 +175,93 @@
   ],
   "flags": [],
   "confidence": "high"
+ },
+ {
+  "id": "S5",
+  "side": "short",
+  "open": 1729054800,
+  "close": 1729060560,
+  "status": "closed",
+  "asset": "BTC",
+  "events": [
+   {
+    "t": 1729054800,
+    "type": "entry",
+    "post": "p0026",
+    "price": 67000.0,
+    "cum": 10
+   },
+   {
+    "t": 1729054860,
+    "type": "stop",
+    "post": "p0027",
+    "stop": 67380.0,
+    "quoted": 67380
+   },
+   {
+    "t": 1729057200,
+    "type": "add",
+    "post": "p0028",
+    "price": 67242.64,
+    "cum": 20,
+    "avg": 67121
+   },
+   {
+    "t": 1729060200,
+    "type": "reduce",
+    "post": "p0029",
+    "price": 67015.8,
+    "cum": 10
+   },
+   {
+    "t": 1729060320,
+    "type": "stop",
+    "post": "p0030",
+    "stop": 67110.0,
+    "quoted": 67110
+   },
+   {
+    "t": 1729060560,
+    "type": "exit",
+    "post": "p0031",
+    "price": 67121.22
+   }
+  ],
+  "size": [
+   {
+    "t": 1729054800,
+    "post": "p0026",
+    "note": "레버 10배"
+   }
+  ],
+  "flags": [
+   "불타기",
+   "평단 기준 리스크 0%"
+  ],
+  "confidence": "high"
+ },
+ {
+  "id": "S6",
+  "side": "short",
+  "open": 1729065600,
+  "close": 1729069200,
+  "status": "closed",
+  "asset": "PEPE",
+  "events": [
+   {
+    "t": 1729065600,
+    "type": "entry",
+    "post": "p0032"
+   },
+   {
+    "t": 1729069200,
+    "type": "exit",
+    "post": "p0033"
+   }
+  ],
+  "flags": [
+   "BTC 아님"
+  ],
+  "confidence": "high"
  }
 ]
