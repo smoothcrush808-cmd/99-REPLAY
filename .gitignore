@@ -1,0 +1,8 @@
+# ★평문 관점방 데이터는 절대 올리지 않는다 (공통설계 §6 A안) — 암호화본 data/*.enc 만 올린다
+data/posts.json
+data/trades.json
+data/*.csv
+# 바이낸스 원본 zip
+_cache/
+*.zip
+__pycache__/

@@ -1,0 +1,202 @@
+[
+ {
+  "id": "p0001",
+  "t": 1728949800,
+  "text": "[샘플] 출근",
+  "kind": "routine",
+  "trade": null,
+  "photo": false
+ },
+ {
+  "id": "p0002",
+  "t": 1728951000,
+  "text": "[샘플] 관점 글 — 박스 상단에서 매수 힘이 약해 보인다는 가상의 메모입니다.\n두 번째 줄도 원문처럼 줄바꿈을 유지하는지 보려고 넣었습니다.",
+  "kind": "view",
+  "trade": null,
+  "photo": false
+ },
+ {
+  "id": "p0003",
+  "t": 1728951120,
+  "text": "[샘플] 사진",
+  "kind": "chat",
+  "trade": null,
+  "photo": true
+ },
+ {
+  "id": "p0004",
+  "t": 1728954120,
+  "text": "[샘플] 숏",
+  "kind": "signal",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0005",
+  "t": 1728954240,
+  "text": "[샘플] 스탑 A",
+  "kind": "risk",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0006",
+  "t": 1728956400,
+  "text": "[샘플] 스탑 줄임 B",
+  "kind": "risk",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0007",
+  "t": 1728957900,
+  "text": "[샘플] 50% 줄임",
+  "kind": "risk",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0008",
+  "t": 1728958020,
+  "text": "[샘플] 정정 30%만 줄임",
+  "kind": "risk",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0009",
+  "t": 1728958200,
+  "text": "[샘플] 스탑 C 리스크 0%",
+  "kind": "risk",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0010",
+  "t": 1728959400,
+  "text": "[샘플] ~하면 비중을 더 줄일 예정이라는 계획 메시지(사건 아님, plan)",
+  "kind": "view",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0011",
+  "t": 1728962400,
+  "text": "[샘플] 종료",
+  "kind": "signal",
+  "trade": "S1",
+  "photo": false
+ },
+ {
+  "id": "p0012",
+  "t": 1728968400,
+  "text": "[샘플] 롱",
+  "kind": "signal",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0013",
+  "t": 1728968460,
+  "text": "[샘플] 스탑 D",
+  "kind": "risk",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0014",
+  "t": 1728970500,
+  "text": "[샘플] 추가 진입(불타기)",
+  "kind": "risk",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0015",
+  "t": 1728970560,
+  "text": "[샘플] 스탑 E로 올림",
+  "kind": "risk",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0016",
+  "t": 1728973200,
+  "text": "[샘플] 10% 익절",
+  "kind": "risk",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0017",
+  "t": 1728975900,
+  "text": "[샘플] 풀익절",
+  "kind": "signal",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0018",
+  "t": 1728975900,
+  "text": "[샘플] 종료",
+  "kind": "signal",
+  "trade": "S2",
+  "photo": false
+ },
+ {
+  "id": "p0019",
+  "t": 1728984600,
+  "text": "[샘플] 퇴근",
+  "kind": "routine",
+  "trade": null,
+  "photo": false
+ },
+ {
+  "id": "p0020",
+  "t": 1729038600,
+  "text": "[샘플] 사고 과정 글 — 1. 가상의 상황 파악 2. 가상의 대응 3. 가상의 결과. 실제 글이 아닙니다.",
+  "kind": "view",
+  "trade": null,
+  "photo": false
+ },
+ {
+  "id": "p0021",
+  "t": 1729041300,
+  "text": "[샘플] 숏 마지막 도전",
+  "kind": "signal",
+  "trade": "S3",
+  "photo": false
+ },
+ {
+  "id": "p0022",
+  "t": 1729041360,
+  "text": "[샘플] 스탑 F 짧음",
+  "kind": "risk",
+  "trade": "S3",
+  "photo": false
+ },
+ {
+  "id": "p0023",
+  "t": 1729041480,
+  "text": "[샘플] 스탑 수정 G",
+  "kind": "risk",
+  "trade": "S3",
+  "photo": false
+ },
+ {
+  "id": "p0024",
+  "t": 1729044000,
+  "text": "[샘플] 롱",
+  "kind": "signal",
+  "trade": "S4",
+  "photo": false
+ },
+ {
+  "id": "p0025",
+  "t": 1729049400,
+  "text": "[샘플] 종료",
+  "kind": "signal",
+  "trade": "S4",
+  "photo": false
+ }
+]

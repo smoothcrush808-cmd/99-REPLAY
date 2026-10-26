@@ -1,0 +1,179 @@
+[
+ {
+  "id": "S1",
+  "side": "short",
+  "open": 1728954120,
+  "close": 1728962400,
+  "status": "closed",
+  "events": [
+   {
+    "t": 1728954120,
+    "type": "entry",
+    "post": "p0004",
+    "price": 65925.65
+   },
+   {
+    "t": 1728954240,
+    "type": "stop",
+    "post": "p0005",
+    "stop": 66453.1,
+    "quoted": 66453.1
+   },
+   {
+    "t": 1728956400,
+    "type": "stop",
+    "post": "p0006",
+    "stop": 66189.4,
+    "quoted": 66189.4
+   },
+   {
+    "t": 1728957900,
+    "type": "reduce",
+    "post": "p0007",
+    "price": 65836.0,
+    "pct": 50,
+    "corrected_by": "p0008"
+   },
+   {
+    "t": 1728958020,
+    "type": "reduce",
+    "post": "p0008",
+    "price": 65782.05,
+    "pct": 30,
+    "note": "정정 — 앞 reduce를 덮어씀"
+   },
+   {
+    "t": 1728958200,
+    "type": "stop",
+    "post": "p0009",
+    "stop": 65859.7,
+    "quoted": 65859.7,
+    "note": "리스크 0%"
+   },
+   {
+    "t": 1728962400,
+    "type": "exit",
+    "post": "p0011",
+    "price": 65656.0
+   }
+  ],
+  "plans": [
+   {
+    "t": 1728959400,
+    "post": "p0010"
+   }
+  ],
+  "flags": [
+   "정정"
+  ],
+  "confidence": "high"
+ },
+ {
+  "id": "S2",
+  "side": "long",
+  "open": 1728968400,
+  "close": 1728975900,
+  "status": "closed",
+  "events": [
+   {
+    "t": 1728968400,
+    "type": "entry",
+    "post": "p0012",
+    "price": 65599.99
+   },
+   {
+    "t": 1728968460,
+    "type": "stop",
+    "post": "p0013",
+    "stop": 65140.8,
+    "quoted": 65140.8
+   },
+   {
+    "t": 1728970500,
+    "type": "add",
+    "post": "p0014",
+    "price": 65268.0
+   },
+   {
+    "t": 1728970560,
+    "type": "stop",
+    "post": "p0015",
+    "stop": 65665.6,
+    "quoted": 65665.6,
+    "note": "리스크 0%"
+   },
+   {
+    "t": 1728973200,
+    "type": "reduce",
+    "post": "p0016",
+    "price": 65520.0,
+    "pct": 10
+   },
+   {
+    "t": 1728975900,
+    "type": "exit",
+    "post": "p0017",
+    "price": 65652.52
+   }
+  ],
+  "flags": [],
+  "confidence": "high"
+ },
+ {
+  "id": "S3",
+  "side": "short",
+  "open": 1729041300,
+  "close": null,
+  "status": "unclosed",
+  "events": [
+   {
+    "t": 1729041300,
+    "type": "entry",
+    "post": "p0021",
+    "price": 66910.0
+   },
+   {
+    "t": 1729041360,
+    "type": "stop",
+    "post": "p0022",
+    "stop": 67043.8,
+    "quoted": 67043.8
+   },
+   {
+    "t": 1729041480,
+    "type": "stop",
+    "post": "p0023",
+    "stop": 67110.7,
+    "quoted": 67110.7
+   }
+  ],
+  "flags": [
+   "마지막 도전",
+   "스탑 잦은 수정"
+  ],
+  "confidence": "low"
+ },
+ {
+  "id": "S4",
+  "side": "long",
+  "open": 1729044000,
+  "close": 1729049400,
+  "status": "closed",
+  "events": [
+   {
+    "t": 1729044000,
+    "type": "entry",
+    "post": "p0024",
+    "price": 67376.0
+   },
+   {
+    "t": 1729049400,
+    "type": "exit",
+    "post": "p0025",
+    "price": 67147.5
+   }
+  ],
+  "flags": [],
+  "confidence": "high"
+ }
+]
