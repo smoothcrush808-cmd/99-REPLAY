@@ -1,6 +1,6 @@
 {
-  "name": "BTC 심리차트",
-  "short_name": "심리차트",
+  "name": "관점방 리플레이",
+  "short_name": "리플레이",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

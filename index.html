@@ -8,11 +8,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="심리차트">
+<meta name="apple-mobile-web-app-title" content="리플레이">
 <link rel="apple-touch-icon" href="icon-180.png?v=2">
 <link rel="icon" type="image/png" href="icon-192.png?v=2">
 <link rel="manifest" href="manifest.webmanifest">
-<title>BTC 심리차트</title>
+<title>관점방 리플레이</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -56,9 +56,9 @@
   .app {
     height:100vh; height:100dvh;
     display:grid;
-    grid-template-columns: 60px 1fr;
+    grid-template-columns: 60px minmax(0, 1fr) 340px;
     grid-template-rows: auto 1fr;
-    grid-template-areas: "top top" "tools chart";
+    grid-template-areas: "top top top" "tools chart side";
     /* 노치·상태바·홈 막대 자리 비우기 (홈 화면 앱일 때 필요) */
     padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
   }
@@ -74,10 +74,8 @@
   .logo span { color:var(--text-dim); font-weight:600; }
   .venue { font-family:var(--mono); font-size:11px; color:var(--text-sub); letter-spacing:1px; }
   .live { display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:15px; font-weight:600; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--text-sub); flex:none; }
-  .dot.ok { background:var(--up); box-shadow:0 0 8px rgba(38,224,165,0.6); }
-  .dot.wait { background:var(--brake); }
-  .dot.bad { background:var(--down); }
+  .live.fixed { font-family:var(--body); font-size:12px; font-weight:600; color:var(--text-dim); }
+  .live.fixed b { color:var(--btc); font-weight:700; }
   .spacer { flex:1; }
 
   .seg { display:flex; border:1px solid var(--border2); border-radius:6px; overflow:hidden; }
@@ -220,12 +218,12 @@
     .app {
       padding-bottom:0;
       grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr auto;
-      grid-template-areas: "top" "chart" "tools";
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      grid-template-areas: "top" "chart" "side" "tools";
     }
     .top { padding:6px 8px; gap:5px; flex-wrap:nowrap; }
     .app { grid-template-columns: minmax(0, 1fr); }
-    .venue, .logo span { display:none; }
+    .venue, .logo span, .live.fixed, #sideBtn { display:none; }
     .logo { font-size:15px; letter-spacing:0; }
     .live { font-size:13px; gap:5px; }
     .seg button { padding:6px 7px; font-size:12px; }
@@ -247,10 +245,15 @@
     #wideBtn { display:inline-flex; }
     /* 와이드일 땐 화면이 넓어지니 PC처럼 도구 막대를 왼쪽에 */
     html.wide .app {
-      grid-template-columns: 46px minmax(0, 1fr);
+      grid-template-columns: 46px minmax(0, 1fr) 260px;
       grid-template-rows: auto 1fr;
-      grid-template-areas: "top top" "tools chart";
+      grid-template-areas: "top top top" "tools chart side";
     }
+    html.wide .app.noside { grid-template-columns: 46px minmax(0, 1fr) 0; }
+    html.wide #sideBtn { display:inline-flex; }
+    html.wide .side { border-top:0; border-left:1px solid var(--border); height:auto; }
+    html.wide .side .side-body, html.wide .side .side-tools { display:flex; }
+    html.wide .drawer-grip .arrow { display:none; }
     html.wide .tools {
       flex-direction:column; justify-content:flex-start; gap:2px;
       border-top:0; border-right:1px solid var(--border); padding:4px;
@@ -262,7 +265,8 @@
   }
   /* 가로로 돌린 폰처럼 높이가 낮을 때: 위·왼쪽 막대를 줄여 차트를 넓게 */
   @media (max-height: 500px) and (min-width: 721px) {
-    .app { grid-template-columns: 46px minmax(0, 1fr); }
+    .app { grid-template-columns: 46px minmax(0, 1fr) 260px; }
+    .app.noside { grid-template-columns: 46px minmax(0, 1fr) 0; }
     .top { padding:4px 10px; gap:8px; }
     .venue { display:none; }
     .logo { font-size:15px; }
@@ -285,6 +289,135 @@
     .seg button, .top .btn { padding:5px 5px; }
     .top .btn svg { width:16px; height:16px; }
   }
+
+  /* ───────── 관점방 리플레이 (추가) ───────── */
+  :root {
+    --k-signal: #f7931a; --k-risk: #ffcc33; --k-view: #33d4ff; --k-routine: #5a7088; --k-chat: #7a93ad;
+    --mine: #c77dff;
+  }
+  .app.noside { grid-template-columns: 60px minmax(0, 1fr) 0; }
+  .app.noside .side { display:none; }
+  #sideBtn.on { border-color:var(--btc); color:var(--btc); }
+
+  /* 관점 패널 */
+  .side { grid-area:side; min-width:0; min-height:0; display:flex; flex-direction:column; border-left:1px solid var(--border); background:var(--bg); }
+  .side-head { display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .drawer-grip { display:flex; align-items:baseline; gap:6px; font-weight:700; font-size:14px; color:var(--text); white-space:nowrap; }
+  .drawer-grip .count { font-family:var(--mono); font-size:11px; color:var(--text-sub); font-weight:500; }
+  .drawer-grip .arrow { display:none; color:var(--text-sub); font-size:12px; }
+  .side-tools { display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-bottom:1px solid var(--border); }
+  .side-tools .r { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .chips { display:flex; border:1px solid var(--border2); border-radius:6px; overflow:hidden; }
+  .chips button { padding:4px 9px; font-size:12px; font-weight:600; color:var(--text-dim); }
+  .chips button + button { border-left:1px solid var(--border2); }
+  .chips button.on { background:var(--bg3); color:var(--text); }
+  .follow { display:flex; align-items:center; gap:4px; font-size:12px; color:var(--text-dim); margin-left:auto; cursor:pointer; white-space:nowrap; }
+  .follow input { accent-color:var(--btc); }
+  .search { width:100%; background:var(--bg2); color:var(--text); border:1px solid var(--border2); border-radius:6px; padding:6px 9px; font-family:var(--body); font-size:16px; }
+  .search::placeholder { color:var(--text-sub); }
+  .side-body { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; display:flex; flex-direction:column; }
+  .post { position:relative; padding:8px 10px 9px 14px; border-bottom:1px solid rgba(36,52,71,0.6); cursor:pointer; }
+  .post::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--k, var(--k-chat)); opacity:0.85; }
+  .post:hover { background:var(--bg2); }
+  .post.near { background:var(--bg2); }
+  .post.sel { background:var(--bg3); box-shadow:inset 0 0 0 1px var(--btc); }
+  .post .ph { display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11px; color:var(--text-sub); margin-bottom:3px; }
+  .post .kd { color:var(--k); font-weight:600; }
+  .post .tr { margin-left:auto; padding:0 6px; border:1px solid var(--border2); border-radius:9px; color:var(--text-dim); font-size:10.5px; }
+  .post .tr:hover { border-color:var(--btc); color:var(--btc); }
+  .post .tx { white-space:pre-wrap; word-break:break-word; font-size:13.5px; line-height:1.55; color:var(--text); }
+  .post .tx.photo { color:var(--text-dim); font-style:italic; }
+  .post.k-routine .tx, .post.k-chat .tx { color:var(--text-dim); }
+  .side-empty { padding:18px 14px; font-size:13px; line-height:1.7; color:var(--text-dim); }
+  .side-empty .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .side-empty b { color:var(--text); }
+  .side-empty[hidden], .side-body[hidden] { display:none !important; }
+  .side-empty code { font-family:var(--mono); font-size:11.5px; color:var(--text); }
+  .badge-sample { font-family:var(--mono); font-size:10.5px; color:var(--bg); background:var(--brake); border-radius:4px; padding:1px 5px; font-weight:700; }
+
+  /* 리플레이 막대 */
+  .rbar {
+    position:absolute; left:8px; right:8px; bottom:8px; z-index:5; margin:0 auto; max-width:760px;
+    background:rgba(16,22,31,0.96); border:1px solid var(--btc-dim); border-radius:10px; padding:8px 10px;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .rbar[hidden] { display:none; }
+  .rb-top { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; font-size:13px; }
+  .rb-top b { font-family:var(--mono); color:var(--btc); }
+  .rb-top .info { font-family:var(--mono); font-size:11.5px; color:var(--text-dim); }
+  .rb-ev { font-size:12.5px; line-height:1.5; color:var(--text); max-height:4.6em; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  .rb-ev:empty { display:none; }
+  .rb-ev .who { font-family:var(--mono); font-size:11px; color:var(--btc); margin-right:6px; }
+  .rb-btns { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .rb-btns .btn { padding:6px 10px; min-height:34px; }
+  .rb-btns select { background:var(--bg); color:var(--text-dim); border:1px solid var(--border2); border-radius:6px; padding:6px 4px; font-size:13px; min-height:34px; }
+  .rb-btns .btn.on { background:var(--btc); color:var(--bg); border-color:var(--btc); }
+  .rb-btns .end { margin-left:auto; }
+  .chart-wrap.replaying .hint { bottom:auto; top:36px; }
+
+  /* 팝업 (추가분) */
+  .panel.wide { max-width:620px; }
+  .tlist { list-style:none; display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .tlist li { display:flex; gap:6px; }
+  .trow { flex:1; min-width:0; text-align:left; padding:8px 10px; border:1px solid var(--border2); border-radius:8px; background:var(--bg);
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .trow:hover { border-color:var(--btc); }
+  .trow .d { font-family:var(--mono); font-size:12px; color:var(--text-dim); }
+  .side-chip { font-family:var(--mono); font-size:11px; font-weight:700; padding:1px 6px; border-radius:4px; }
+  .side-chip.long { color:var(--bg); background:var(--up); }
+  .side-chip.short { color:#fff; background:var(--down); }
+  .res { font-family:var(--mono); font-size:12px; font-weight:600; }
+  .res.u { color:var(--up); } .res.d { color:var(--down); } .res.n { color:var(--text-sub); }
+  .flag { font-size:11px; padding:1px 6px; border-radius:9px; border:1px solid var(--border2); color:var(--text-dim); }
+  .flag.low { border-color:var(--brake); color:var(--brake); }
+  .flag.mine { border-color:var(--mine); color:var(--mine); }
+  .tbtn { flex:none; padding:0 10px; border:1px solid var(--border2); border-radius:8px; font-size:12px; color:var(--text-dim); }
+  .tbtn:hover { border-color:var(--btc); color:var(--btc); }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; font-size:13px; margin:10px 0; }
+  .kv dt { color:var(--text-sub); font-size:12px; }
+  .kv dd { font-family:var(--mono); color:var(--text); }
+  .evs { list-style:none; display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+  .evs li { border:1px solid var(--border); border-radius:8px; padding:7px 9px; background:var(--bg); }
+  .evs li.hit { border-color:var(--btc); }
+  .evs li.corr { opacity:0.55; }
+  .evs .eh { font-family:var(--mono); font-size:11.5px; color:var(--text-dim); display:flex; gap:8px; flex-wrap:wrap; }
+  .evs .eh b { color:var(--text); }
+  .evs .tx { white-space:pre-wrap; word-break:break-word; font-size:13px; line-height:1.55; margin-top:3px; }
+  .note { font-size:11.5px; color:var(--brake); }
+  .cmp { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:8px; }
+  .cmp th, .cmp td { border-bottom:1px solid var(--border); padding:6px 4px; text-align:left; vertical-align:top; }
+  .cmp th { font-size:11px; color:var(--text-sub); font-weight:600; }
+  .cmp td.t { font-family:var(--mono); font-size:11px; color:var(--text-dim); white-space:nowrap; }
+  .cmp .same { color:var(--up); font-weight:700; }
+  .cmp .diff { color:var(--brake); font-weight:700; }
+  .cmp .none { color:var(--text-sub); }
+  .cmp .src { white-space:pre-wrap; color:var(--text-dim); font-size:12px; }
+  .quick .btn.on { background:var(--btc); color:var(--bg); border-color:var(--btc); }
+  .mine-stop { font-family:var(--mono); font-size:13px; color:var(--mine); align-self:center; }
+  .chk { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-dim); margin-top:10px; }
+  .chk input { accent-color:var(--btc); }
+
+  @media (max-width: 720px) {
+    .side { border-left:0; border-top:1px solid var(--border); max-height:44px; }
+    .side.open { max-height:none; height:46dvh; }
+    .side .side-tools, .side .side-body, .side .side-empty { display:none; }
+    .side.open .side-tools, .side.open .side-body { display:flex; }
+    .side.open .side-empty { display:block; }
+    .side-head { padding:6px 10px; min-height:43px; }
+    .drawer-grip { flex:1; }
+    .drawer-grip .arrow { display:inline; margin-left:auto; }
+    .side-head .follow { display:none; }
+    .side.open .side-head .follow { display:flex; }
+    .rbar { left:4px; right:4px; bottom:4px; padding:6px 8px; }
+    .rb-btns .btn { padding:6px 8px; font-size:12px; min-width:42px; min-height:38px; justify-content:center; }
+    .rb-btns select { min-height:38px; }
+    .rb-btns .lbl2 { display:none; }
+  }
+  @media (max-width: 720px) {
+    html.wide .side, html.wide .side.open { max-height:none; height:auto; }
+    html.wide .side .side-empty { display:block; }
+    html.wide .side-head .follow { display:flex; }
+  }
 </style>
 </head>
 <body>
@@ -296,9 +429,10 @@
       <div class="logo">BTC<span>/USDT</span></div>
       <div class="venue">BINANCE SPOT · KST</div>
     </div>
-    <div class="live"><span class="dot" id="connDot" title="실시간 연결 상태"></span><span id="livePrice">—</span></div>
+    <div class="live fixed" id="fixedLabel"><b>관점방 리플레이</b>&nbsp;· 2022-01 ~ 2024-12-06</div>
     <div class="spacer"></div>
     <div class="seg" id="ivSeg">
+      <button data-iv="1m"><span class="l">1분</span><span class="s">1m</span></button>
       <button data-iv="5m"><span class="l">5분</span><span class="s">5m</span></button>
       <button data-iv="15m"><span class="l">15분</span><span class="s">15m</span></button>
       <button data-iv="1h"><span class="l">1시간</span><span class="s">1h</span></button>
@@ -307,6 +441,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg><span class="lbl">날짜</span></button>
     <button class="btn" id="latestBtn" title="최신으로 (L)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 6 12 12 6 18"/><polyline points="12 6 18 12 12 18"/></svg><span class="lbl">최신</span></button>
+    <button class="btn" id="replayBtn" title="매매 목록 · 리플레이 (P)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 4 20 12 6 20 6 4"/></svg><span class="lbl">리플레이</span></button>
+    <button class="btn on" id="sideBtn" title="관점 패널 켜기/끄기 (O)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg><span class="lbl">관점</span></button>
     <button class="btn" id="wideBtn" title="와이드 (화면 가로로 돌리기)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="11" rx="2"/><path d="M7 3h6"/><polyline points="11 1 13 3 11 5"/></svg><span class="lbl">와이드</span></button>
     <button class="btn" id="dataBtn" title="그림 내보내기 / 가져오기">
@@ -327,6 +465,8 @@
     <button class="tool" data-tool="text" title="텍스트 (T)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="5 7 5 4 19 4 19 7"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>텍스트</button>
     <div class="tool-sep"></div>
+    <button class="tool on" id="markBtn" title="매매 마커 켜기/끄기 (M)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7 4 11 11 3 11 7 4" fill="currentColor" fill-opacity="0.3"/><polyline points="13 7 17 7 17 13 21 13"/><line x1="14" y1="17" x2="20" y2="23"/><line x1="20" y1="17" x2="14" y2="23"/></svg>매매</button>
     <button class="tool" id="undoBtn" title="되돌리기 (Ctrl+Z)" disabled>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>되돌리기</button>
     <button class="tool erase" data-tool="erase" title="지우기 (E)">
@@ -341,7 +481,40 @@
       <div class="swatches" id="swatches" hidden></div>
     </div>
     <div class="toast" id="toast"></div>
+    <!-- 리플레이 막대 -->
+    <div class="rbar" id="rbar" hidden>
+      <div class="rb-top"><b id="rbTitle"></b><span class="info" id="rbInfo"></span></div>
+      <div class="rb-ev" id="rbEvent"></div>
+      <div class="rb-btns">
+        <button class="btn accent" id="rbMine" title="지금 자리에서 내 판단 적기">✍<span class="lbl2">&nbsp;나라면?</span></button>
+        <button class="btn" id="rbStep" title="1봉 넘기기 (→)">▶<span class="lbl2">&nbsp;1봉</span></button>
+        <button class="btn" id="rbNext" title="다음 사건 열기 (Shift+→)">▶▶<span class="lbl2">&nbsp;다음 사건</span></button>
+        <button class="btn" id="rbPlay" title="자동재생 (Space) — 사건 앞에서 멈춤">⏵<span class="lbl2">&nbsp;자동</span></button>
+        <select id="rbSpeed" title="자동재생 속도 (봉/초)">
+          <option value="1">1봉/초</option><option value="3" selected>3봉/초</option><option value="8">8봉/초</option><option value="20">20봉/초</option>
+        </select>
+        <button class="btn" id="rbBlind" title="블라인드 켜기/끄기 — 끄면 전체 보기(공부용)">블라인드</button>
+        <button class="btn end" id="rbEnd" title="리플레이 끝내기">✕</button>
+      </div>
+    </div>
   </main>
+
+  <aside class="side" id="side">
+    <div class="side-head">
+      <button class="drawer-grip" id="drawerGrip">관점방 <span class="count" id="sideCount"></span><span id="sampleBadge"></span><span class="arrow" id="gripArrow">▴</span></button>
+      <label class="follow" title="차트를 움직이면 그 시각 근처 글로 따라간다"><input type="checkbox" id="followChk" checked> 따라가기</label>
+    </div>
+    <div class="side-tools">
+      <div class="r">
+        <div class="chips" id="kindChips">
+          <button data-f="all" class="on">전부</button><button data-f="view">관점</button><button data-f="signal">신호·리스크</button>
+        </div>
+      </div>
+      <input type="search" class="search" id="postSearch" placeholder="본문 검색" autocomplete="off">
+    </div>
+    <div class="side-body" id="postList"></div>
+    <div class="side-empty" id="sideEmpty" hidden></div>
+  </aside>
 </div>
 
 <!-- 날짜 이동 -->
@@ -357,13 +530,12 @@
 
     <h3 style="margin-top:20px">날짜 이동</h3>
     <p class="sub">한국시간(KST) 기준. 그 시각 봉을 화면 가운데에 놓고 세로 점선으로 표시합니다.</p>
-    <input type="datetime-local" id="gotoInput" min="2022-01-01T00:00" step="60">
+    <input type="datetime-local" id="gotoInput" min="2022-01-01T00:00" max="2024-12-06T23:59" step="60">
     <div class="label">빠른 이동</div>
     <div class="quick">
-      <button class="btn" data-ago="1">1일 전</button>
-      <button class="btn" data-ago="7">1주 전</button>
-      <button class="btn" data-ago="30">1달 전</button>
-      <button class="btn" data-ago="365">1년 전</button>
+      <button class="btn" data-date="2024-09-29T00:00">관점방 시작</button>
+      <button class="btn" data-date="2024-12-06T23:00">관점방 끝</button>
+      <button class="btn" data-date="2024-01-01T00:00">2024 시작</button>
       <button class="btn" data-date="2022-01-01T00:00">2022 시작</button>
     </div>
     <div class="row end">
@@ -389,9 +561,9 @@
 <!-- 내보내기 / 가져오기 -->
 <div class="backdrop" id="dataModal">
   <div class="panel">
-    <h3>그림 저장 · 옮기기</h3>
-    <p class="sub">그림은 이 기기 브라우저에 자동 저장됩니다. 다른 기기로 옮길 때는 여기서 내보내고, 받는 기기에서 가져오세요. 가져오기는 <b>합치기</b>입니다 (기존 그림 유지, 같은 그림은 중복 안 됨).</p>
-    <div>지금 그림 <span class="count" id="drawCount">0</span>개 · 북마크 <span class="count" id="bmCount2">0</span>개</div>
+    <h3>그림 · 리플레이 답 저장 · 옮기기</h3>
+    <p class="sub">그림·북마크·리플레이 답은 이 기기 브라우저에 자동 저장됩니다. 다른 기기로 옮기거나 매매 볼트로 가져갈 때는 여기서 내보내고, 받는 기기에서 가져오세요. 가져오기는 <b>합치기</b>입니다 (기존 것 유지, 같은 것은 중복 안 됨).</p>
+    <div>지금 그림 <span class="count" id="drawCount">0</span>개 · 북마크 <span class="count" id="bmCount2">0</span>개 · 리플레이 답 <span class="count" id="ansCount">0</span>매매</div>
 
     <div class="label">내보내기</div>
     <div class="row" style="margin-top:0">
@@ -419,10 +591,71 @@
     </div>
   </div>
 </div>
+
+<!-- 매매 목록 -->
+<div class="backdrop" id="tradeModal">
+  <div class="panel wide">
+    <h3>매매 목록 <span class="count" id="tradeCount">0</span></h3>
+    <p class="sub">하나 고르면 <b>블라인드 리플레이</b>가 시작됩니다 — 진입 직전 봉까지만 보이고, 「다음 사건」을 누를 때마다 그의 실제 행동이 원문과 함께 열립니다. 결과 %는 첫 진입가 대비 종료가입니다. 꼬리표는 판정이 아니라 표시입니다.</p>
+    <ul class="tlist" id="tradeList"></ul>
+    <div class="row end"><button class="btn" data-close>닫기</button></div>
+  </div>
+</div>
+
+<!-- 매매 카드 (마커 탭) -->
+<div class="backdrop" id="cardModal">
+  <div class="panel wide" id="cardBody"></div>
+</div>
+
+<!-- 나라면? -->
+<div class="backdrop" id="mineModal">
+  <div class="panel">
+    <h3 id="mineTitle">나라면?</h3>
+    <p class="sub">지금 보이는 봉·글만 보고 적습니다. 잘잘못 판정은 없고, 끝나면 그의 행동과 <b>같은 행동인가</b>만 나란히 보여줍니다.</p>
+    <div class="label">행동</div>
+    <div class="quick" id="mineActs"></div>
+    <div id="mineSideRow">
+      <div class="label">방향</div>
+      <div class="quick" id="mineSides"><button class="btn" data-side="long">롱</button><button class="btn" data-side="short">숏</button></div>
+    </div>
+    <div class="label">스탑 자리</div>
+    <div class="row" style="margin-top:0">
+      <button class="btn" id="minePick">차트에서 찍기</button>
+      <span class="mine-stop" id="mineStop">—</span>
+      <button class="btn" id="mineStopClear">지움</button>
+    </div>
+    <div class="label">메모 (한 줄)</div>
+    <input type="text" class="field" id="mineMemo" maxlength="140" placeholder="예: 박스 상단 거래 실패 → 숏, 스탑은 고점 위" autocomplete="off">
+    <div class="row end">
+      <button class="btn" data-close>닫기</button>
+      <button class="btn accent" id="mineSave">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 리플레이 끝: 나란히 보기 -->
+<div class="backdrop" id="cmpModal">
+  <div class="panel wide" id="cmpBody"></div>
+</div>
+
+<!-- 비밀번호 (A안) -->
+<div class="backdrop" id="lockModal">
+  <div class="panel">
+    <h3>🔒 관점방 글·장부 열기</h3>
+    <p class="sub">글·장부는 암호화되어 올라가 있습니다. 비밀번호를 넣으면 이 브라우저 안에서만 풀립니다(서버로 보내지 않음). 비밀번호 없이도 차트(공개 시세)는 그대로 쓸 수 있습니다.</p>
+    <input type="password" class="field" id="lockPw" placeholder="비밀번호" autocomplete="current-password">
+    <label class="chk"><input type="checkbox" id="lockRemember"> 이 기기에서 기억 (다음부터 묻지 않음)</label>
+    <div class="row end">
+      <button class="btn" data-close>닫기</button>
+      <button class="btn accent" id="lockOk">열기</button>
+    </div>
+  </div>
+</div>
+<input type="file" id="vaultFile" accept=".json,application/json" multiple hidden>
 </div><!-- #root -->
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=11"></script>
+<script src="app.js?v=1"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
-// BTC 심리차트 — 바이낸스 현물 BTCUSDT 캔들 + 그리기 도구 (빌드 없음)
+// 관점방 리플레이 — BTC 심리차트(고정 과거 시세 2022-01 ~ 2024-12-06) 위에 관점방 글 읽기 + 매매 리플레이 (빌드 없음)
+// 원본: smoothcrush808-cmd/BTC 의 app.js — 그리기·북마크·와이드는 그대로, 시세는 data/klines/ 월 파일로 바꿨다
 (() => {
 'use strict';
 
@@ -60,23 +61,19 @@ const wide = (() => {
 })();
 const SYMBOL = 'BTCUSDT';
 const KST = 9 * 3600;            // 차트 시각은 KST로 밀어서 넣는다 (눈금이 KST 자정에 맞도록)
-const PAGE = 1000;               // 바이낸스 klines 최대 개수
-const EDGE = 150;                // 가장자리에서 이 정도 봉 남으면 더 받는다
-const STORE_KEY = 'psychChart.drawings.v1';
-const PREF_KEY = 'psychChart.prefs.v1';
-const BM_KEY = 'psychChart.bookmarks.v1';
+const EDGE = 150;                // 가장자리에서 이 정도 봉 남으면 옆 달 파일을 붙인다
+// 원본(BTC 심리차트)과 같은 github.io 주소라 localStorage를 같이 쓴다 → 키 이름을 달리해 서로 덮어쓰지 않게
+const STORE_KEY = 'nine9Replay.drawings.v1';
+const PREF_KEY = 'nine9Replay.prefs.v1';
+const BM_KEY = 'nine9Replay.bookmarks.v1';
+const ANS_KEY = 'nine9Replay.answers.v1';   // 리플레이 답 (02_차트_작업지시 §1-6)
+const KEY_KEY = 'nine9Replay.key.v1';       // 「이 기기에서 기억」을 고른 경우의 복호화 키
+const LOCAL_KEY = 'nine9Replay.vault.v1';   // B안: 가져오기로 넣은 posts·trades
 
-const IVS = { '5m': 300, '15m': 900, '1h': 3600 };
-
-const REST_BASES = [
-  'https://data-api.binance.vision',
-  'https://api.binance.com',
-  'https://api1.binance.com',
-];
-const WS_BASES = [
-  'wss://data-stream.binance.vision/ws/',
-  'wss://stream.binance.com:9443/ws/',
-];
+const IVS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
+const IV_LABEL = { '1m': '1분', '5m': '5분', '15m': '15분', '1h': '1시간' };
+const WIN = { '1m': 3, '5m': 12, '15m': 40, '1h': 40 }; // 메모리에 둘 달 수 (1분봉은 보이는 달 ±1)
+const KDIR = 'data/klines/';
 
 const C = {
   bg: '#0a0e14', grid: 'rgba(36,52,71,0.45)', border: '#243447', text: '#8a9ab0',
@@ -84,6 +81,7 @@ const C = {
   hline: '#f7931a', ray: '#33d4ff', dot: '#ffcc33',
   box: '#7a93ad', boxFill: 'rgba(122,147,173,0.14)',
   erase: '#ff5572', jump: 'rgba(247,147,26,0.7)',
+  stop: '#ff8a3d', risk0: '#33d4ff', reduce: '#ffcc33', exit: '#e6edf3', mine: '#c77dff', now: '#f7931a',
 };
 
 const $ = id => document.getElementById(id);
@@ -98,6 +96,7 @@ const store = {
     try { localStorage.setItem(key, JSON.stringify(val)); return true; }
     catch { return false; }
   },
+  del(key) { try { localStorage.removeItem(key); } catch {} },
 };
 
 // ───────────────────────── 시각 표시 (차트 시각은 이미 +9h 되어 있어 UTC 게터로 읽는다)
@@ -122,15 +121,20 @@ const fmtPrice = p => p.toLocaleString('en-US', { minimumFractionDigits: 2, maxi
 const fmtAxis = p => Math.round(p).toLocaleString('en-US');
 const msToChart = ms => Math.floor(ms / 1000) + KST;
 const chartToMs = t => (t - KST) * 1000;
-
-// ───────────────────────── 시세 REST
-let restIdx = 0; // 마지막으로 성공한 경로를 먼저 쓴다
+const fmtUtc = (t, wd = true) => fmtChartTime(t + KST, wd);   // 데이터 파일의 UTC 초 → KST 표시
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function fmtDur(sec) {
+  if (!Number.isFinite(sec)) return '—';
+  const m = Math.round(sec / 60), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  return (d ? `${d}일 ` : '') + (d || h ? `${h}시간 ` : '') + `${mm}분`;
+}
+const fmtPct = (v, sign = true) => (Number.isFinite(v) ? `${sign && v > 0 ? '+' : ''}${v.toFixed(2)}%` : '—');
 
 async function fetchJson(url, timeoutMs = 12000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (e) {
@@ -140,37 +144,65 @@ async function fetchJson(url, timeoutMs = 12000) {
   }
 }
 
-async function fetchKlines(interval, { startTime, endTime, limit = PAGE } = {}) {
-  const q = new URLSearchParams({ symbol: SYMBOL, interval, limit: String(limit) });
-  if (startTime != null) q.set('startTime', String(Math.max(0, Math.floor(startTime))));
-  if (endTime != null) q.set('endTime', String(Math.floor(endTime)));
-  const path = `/api/v3/klines?${q}`;
+// ───────────────────────── 시세 — 고정 월 파일 (tools/build_klines.py가 만든 data/klines/)
+// 봉마다 int32 LE 5개(20바이트): t(분 단위 UTC epoch) · o·h·l·c(×price_scale). 파일은 KST 달 단위.
+const klines = (() => {
+  let index = null;
+  const memo = new Map(); // 'iv/YYYY-MM' → Promise<bars> (간격별로 최근 WIN+1 달만)
 
-  const routes = REST_BASES.map((b, i) => ({ i, name: new URL(b).host, url: b + path }));
-  routes.push({ i: REST_BASES.length, name: 'corsproxy', url: `https://corsproxy.io/?url=${encodeURIComponent(REST_BASES[0] + path)}` });
-  const ordered = [...routes.slice(restIdx), ...routes.slice(0, restIdx)];
-
-  const errors = [];
-  for (const r of ordered) {
-    try {
-      const json = await fetchJson(r.url);
-      if (!Array.isArray(json)) throw new Error(`unexpected: ${JSON.stringify(json).slice(0, 80)}`);
-      restIdx = r.i;
-      return json.map(k => ({
-        time: msToChart(k[0]),
-        open: +k[1], high: +k[2], low: +k[3], close: +k[4],
-      }));
-    } catch (e) {
-      errors.push(`${r.name}: ${e.message}`);
-    }
+  async function init() {
+    index = await fetchJson(KDIR + 'index.json');
+    if (!index || !index.intervals) throw new Error('index.json 형식이 다릅니다');
+    return index;
   }
-  throw new Error(errors.join(' | '));
+  const months = iv => (index && index.intervals[iv] && index.intervals[iv].months) || [];
+
+  function parse(buf) {
+    const dv = new DataView(buf), n = Math.floor(buf.byteLength / 20);
+    const sc = (index.format && index.format.price_scale) || 100;
+    const out = new Array(n);
+    for (let i = 0, o = 0; i < n; i++, o += 20) {
+      out[i] = {
+        time: dv.getInt32(o, true) * 60 + KST,
+        open: dv.getInt32(o + 4, true) / sc, high: dv.getInt32(o + 8, true) / sc,
+        low: dv.getInt32(o + 12, true) / sc, close: dv.getInt32(o + 16, true) / sc,
+      };
+    }
+    return out;
+  }
+
+  function load(iv, ym) {
+    const k = `${iv}/${ym}`;
+    if (memo.has(k)) { const p = memo.get(k); memo.delete(k); memo.set(k, p); return p; }
+    const p = fetch(`${KDIR}${iv}/${ym}.bin?b=${encodeURIComponent(index.built || '')}`).then(async r => {
+      if (!r.ok) throw new Error(`${iv}/${ym}.bin HTTP ${r.status}`);
+      return parse(await r.arrayBuffer());
+    });
+    memo.set(k, p);
+    p.catch(() => memo.delete(k));
+    const same = [...memo.keys()].filter(x => x.startsWith(iv + '/'));
+    while (same.length > WIN[iv] + 1) memo.delete(same.shift());
+    return p;
+  }
+
+  return {
+    init, months, load,
+    ready: () => !!index,
+    startMs: () => (index ? index.start * 1000 : Date.UTC(2021, 11, 31, 15)),
+    endMs: () => (index ? index.end * 1000 - 60000 : Date.UTC(2024, 11, 6, 14, 59)),
+  };
+})();
+const ymOf = chartT => { const d = new Date(chartT * 1000); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`; };
+const monthStart = ym => Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1) / 1000; // 차트 시각(KST로 민 값)
+const clampMs = ms => Math.min(klines.endMs(), Math.max(klines.startMs(), ms));
+async function loadMonths(iv, list) {
+  const arrs = await Promise.all(list.map(m => klines.load(iv, m)));
+  return [].concat(...arrs);
 }
 
 // ───────────────────────── 화면 요소
 const ui = {
   legend: $('legend'), hint: $('hint'), hintText: $('hintText'), toast: $('toast'),
-  livePrice: $('livePrice'), connDot: $('connDot'),
 };
 
 let toastTimer = 0;
@@ -202,6 +234,8 @@ const chart = LWC.createChart($('chart'), {
   timeScale: {
     borderColor: C.border, timeVisible: true, secondsVisible: false,
     rightOffset: 8, barSpacing: window.innerWidth < 720 ? 4.5 : 7, tickMarkFormatter: tickFmt,
+    // 실시간이 없으니 봉이 늘어날 때 화면을 오른쪽 끝으로 끌고 가지 않는다 (블라인드를 풀거나 다음 달을 붙일 때)
+    shiftVisibleRangeOnNewBar: false,
   },
   localization: { locale: 'ko-KR', timeFormatter: t => fmtChartTime(t), priceFormatter: fmtAxis },
   crosshair: {
@@ -220,34 +254,58 @@ const series = chart.addSeries(LWC.CandlestickSeries, {
 const ts = chart.timeScale();
 
 // ───────────────────────── 봉 데이터 상태 (봉 간격별로 메모리에 둔다)
-// bars: 연속된 구간 하나. atLatest: 오른쪽 끝이 지금 봉인가 (실시간 반영 여부)
+// bars: 이어 붙인 달 파일들(ms = 그 달 목록, 연속). atLatest: 마지막 달(2024-12)까지 붙었나
 const cache = {};
 const S = {
-  iv: '5m', bars: [], atLatest: false, noMoreLeft: false,
+  iv: '5m', bars: [], ms: [], atLatest: false, noMoreLeft: false,
   loadingLeft: false, loadingRight: false, gen: 0, jumpT: null,
 };
 const sec = () => IVS[S.iv];
 
-function mergeBars(a, b) {
-  const m = new Map();
-  for (const x of a) m.set(x.time, x);
-  for (const x of b) m.set(x.time, x);
-  return [...m.values()].sort((x, y) => x.time - y.time);
+// 리플레이 상태 (블라인드면 now까지 닫힌 봉만 그린다) — 아래 리플레이 절에서 쓴다
+const R = { trade: null, now: 0, step: 0, shownT: -Infinity, blind: true, timer: 0, draft: null, pick: false };
+const blindOn = () => !!(R.trade && R.blind);
+
+// 실제로 그리는 봉 수: 블라인드면 now 전에 닫힌 봉까지
+let shownLen = 0, shownSrc = null;
+function cutLen() {
+  if (!blindOn()) return S.bars.length;
+  return indexAtOrBefore(R.now + KST - sec()) + 1;
+}
+// 몇 봉만 늘어난 경우는 update로 (리플레이 넘기기가 가볍도록)
+function pushSeries(force = false) {
+  const n = cutLen();
+  if (!force && shownSrc === S.bars && shownLen > 0 && n >= shownLen && n - shownLen <= 60) {
+    for (let i = shownLen; i < n; i++) series.update(S.bars[i]);
+  } else {
+    // 통째로 바꾸면 차트가 오른쪽 끝으로 붙어 버리므로 보던 자리를 되돌린다
+    const r = ts.getVisibleLogicalRange();
+    series.setData(n === S.bars.length ? S.bars : S.bars.slice(0, n));
+    if (r) ts.setVisibleLogicalRange(r);
+  }
+  shownLen = n; shownSrc = S.bars;
+}
+
+function setEdges() {
+  const all = klines.months(S.iv);
+  S.noMoreLeft = !S.ms.length || S.ms[0] === all[0];
+  S.atLatest = !S.ms.length || S.ms[S.ms.length - 1] === all[all.length - 1];
 }
 
 // 데이터를 바꾸되 보던 자리를 유지한다 (shift = 왼쪽에 새로 붙은 봉 수)
 function applyBars(newBars, shift = 0) {
   const r = ts.getVisibleLogicalRange();
   S.bars = newBars;
-  series.setData(newBars);
+  setEdges();
+  pushSeries(true);
   if (r && S.bars.length) ts.setVisibleLogicalRange({ from: r.from + shift, to: r.to + shift });
   saveCache();
-  drawings.refresh();
+  refreshAll();
   updateLegend();
 }
 
 function saveCache() {
-  cache[S.iv] = { bars: S.bars, atLatest: S.atLatest, noMoreLeft: S.noMoreLeft };
+  cache[S.iv] = { bars: S.bars, ms: S.ms };
 }
 
 function setBusy(on) {
@@ -255,23 +313,30 @@ function setBusy(on) {
   updateLegend();
 }
 
+function noData() {
+  toast('시세 파일이 없습니다 — tools/build_klines.py 로 data/klines/ 를 만들어 주세요', { error: true, ms: 8000 });
+}
+
 async function loadLatest() {
+  const all = klines.months(S.iv);
+  if (!all.length) { noData(); return; }
   const gen = ++S.gen;
   setBusy(true);
   try {
-    const bars = await fetchKlines(S.iv);
+    const want = all.slice(-Math.min(2, all.length)); // 12월은 6일뿐이라 앞 달까지
+    const bars = await loadMonths(S.iv, want);
     if (gen !== S.gen) return;
-    S.atLatest = true; S.noMoreLeft = false;
-    S.bars = bars;
-    series.setData(bars);
+    S.ms = want; S.bars = bars;
+    setEdges();
+    pushSeries(true);
     ts.scrollToRealTime();
     saveCache();
-    drawings.refresh();
+    refreshAll();
     updateLegend();
     setTimeout(checkEdges, 0);
   } catch (e) {
     if (gen !== S.gen) return;
-    toast('시세를 받지 못했습니다', { error: true, detail: e.message, retry: loadLatest });
+    toast('시세 파일을 읽지 못했습니다', { error: true, detail: e.message, retry: loadLatest });
   } finally {
     if (gen === S.gen) setBusy(false);
   }
@@ -279,19 +344,23 @@ async function loadLatest() {
 
 async function loadLeft() {
   if (S.loadingLeft || S.noMoreLeft || !S.bars.length) return;
+  const all = klines.months(S.iv), i = all.indexOf(S.ms[0]);
+  if (i <= 0) { S.noMoreLeft = true; return; }
   S.loadingLeft = true; setBusy(true);
-  const gen = S.gen, iv = S.iv;
+  const gen = S.gen, iv = S.iv, ym = all[i - 1];
   try {
-    const first = S.bars[0].time;
-    const got = await fetchKlines(iv, { endTime: chartToMs(first) - 1 });
+    const got = await klines.load(iv, ym);
     if (gen !== S.gen || iv !== S.iv) return;
-    if (!got.length) { S.noMoreLeft = true; saveCache(); return; }
-    if (got.length < PAGE) S.noMoreLeft = true;
-    const merged = mergeBars(got, S.bars);
-    const shift = merged.findIndex(b => b.time === first);
-    applyBars(merged, Math.max(0, shift));
+    let ms = [ym, ...S.ms], bars = got.concat(S.bars);
+    // 너무 많으면 오른쪽 달을 덜어 낸다 (왼쪽 번호는 그대로)
+    while (ms.length > WIN[iv]) {
+      const cut = monthStart(ms.pop());
+      bars = bars.slice(0, lowerBound(bars, cut));
+    }
+    S.ms = ms;
+    applyBars(bars, got.length);
   } catch (e) {
-    toast('과거 봉을 받지 못했습니다', { error: true, detail: e.message, ms: 5000 });
+    toast('이전 달 시세를 읽지 못했습니다', { error: true, detail: e.message, ms: 5000 });
   } finally {
     S.loadingLeft = false; setBusy(S.loadingRight);
     setTimeout(checkEdges, 300);
@@ -300,16 +369,24 @@ async function loadLeft() {
 
 async function loadRight() {
   if (S.loadingRight || S.atLatest || !S.bars.length) return;
+  const all = klines.months(S.iv), i = all.indexOf(S.ms[S.ms.length - 1]);
+  if (i < 0 || i >= all.length - 1) { S.atLatest = true; return; }
   S.loadingRight = true; setBusy(true);
-  const gen = S.gen, iv = S.iv;
+  const gen = S.gen, iv = S.iv, ym = all[i + 1];
   try {
-    const last = S.bars[S.bars.length - 1].time;
-    const got = await fetchKlines(iv, { startTime: chartToMs(last) + 1 });
+    const got = await klines.load(iv, ym);
     if (gen !== S.gen || iv !== S.iv) return;
-    if (got.length < PAGE) S.atLatest = true;
-    applyBars(mergeBars(S.bars, got), 0);
+    let ms = [...S.ms, ym], bars = S.bars.concat(got), dropped = 0;
+    // 너무 많으면 왼쪽 달을 덜어 낸다 (그만큼 번호가 당겨짐)
+    while (ms.length > WIN[iv]) {
+      ms.shift();
+      const n = lowerBound(bars, monthStart(ms[0]));
+      bars = bars.slice(n); dropped += n;
+    }
+    S.ms = ms;
+    applyBars(bars, -dropped);
   } catch (e) {
-    toast('다음 봉을 받지 못했습니다', { error: true, detail: e.message, ms: 5000 });
+    toast('다음 달 시세를 읽지 못했습니다', { error: true, detail: e.message, ms: 5000 });
   } finally {
     S.loadingRight = false; setBusy(S.loadingLeft);
     setTimeout(checkEdges, 300);
@@ -324,11 +401,15 @@ function checkEdges() {
 }
 ts.subscribeVisibleLogicalRangeChange(() => {
   checkEdges();
-  drawings.refresh();
+  refreshAll();
+  panel.follow();
+  if (hoverT == null) updateLegend();
 });
 
-// 특정 시각(실제 ms)으로 이동
-async function jumpTo(ms, { mark = true, width: w = null } = {}) {
+// 특정 시각(실제 ms)으로 이동. pos = 그 봉을 화면 폭의 어디에 둘지 (0.5 = 가운데)
+async function jumpTo(ms, { mark = true, width: w = null, pos = 0.5 } = {}) {
+  if (!klines.months(S.iv).length) { noData(); return; }
+  ms = clampMs(ms);
   const s = sec();
   const t = Math.floor(msToChart(ms) / s) * s; // 봉 시작 시각으로 내림 (KST로 민 값 기준이라 1h도 정각)
   if (mark) S.jumpT = t;
@@ -340,38 +421,28 @@ async function jumpTo(ms, { mark = true, width: w = null } = {}) {
     S.loadingLeft = S.loadingRight = false;
     setBusy(true);
     try {
-      const nowMs = Date.now();
-      const startMs = chartToMs(t) - (PAGE / 2) * s * 1000;
-      let bars;
-      if (chartToMs(t) + (PAGE / 2) * s * 1000 >= nowMs) {
-        // 지금과 가까우면 최신 구간을 받는다
-        bars = await fetchKlines(S.iv);
-        S.atLatest = true;
-        if (bars.length && t < bars[0].time) {
-          const more = await fetchKlines(S.iv, { endTime: chartToMs(bars[0].time) - 1 });
-          bars = mergeBars(more, bars);
-        }
-      } else {
-        bars = await fetchKlines(S.iv, { startTime: startMs });
-        S.atLatest = bars.length < PAGE;
-      }
+      const all = klines.months(S.iv);
+      let i = all.indexOf(ymOf(t));
+      if (i < 0) { i = all.findIndex(m => m > ymOf(t)); if (i < 0) i = all.length - 1; }
+      const want = [all[i]];
+      const bars = await loadMonths(S.iv, want);
       if (gen !== S.gen) return;
       if (!bars.length) { toast('그 시각의 봉이 없습니다', { error: true }); return; }
-      S.noMoreLeft = false;
-      S.bars = bars;
-      series.setData(bars);
+      S.ms = want; S.bars = bars;
+      setEdges();
+      pushSeries(true);
       saveCache();
     } catch (e) {
       if (gen !== S.gen) return;
-      toast('그 시각의 시세를 받지 못했습니다', { error: true, detail: e.message, retry: () => jumpTo(ms, { mark }) });
+      toast('그 시각의 시세를 읽지 못했습니다', { error: true, detail: e.message, retry: () => jumpTo(ms, { mark, width: w, pos }) });
       return;
     } finally {
       if (gen === S.gen) setBusy(false);
     }
   }
   const idx = indexAtOrBefore(t);
-  ts.setVisibleLogicalRange({ from: idx - width / 2, to: idx + width / 2 });
-  drawings.refresh();
+  ts.setVisibleLogicalRange({ from: idx - width * pos, to: idx + width * (1 - pos) });
+  refreshAll();
   updateLegend();
   setTimeout(checkEdges, 0);
 }
@@ -385,6 +456,12 @@ function indexAtOrBefore(t) {
     if (b[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1;
   }
   return ans;
+}
+// time >= t 인 첫 봉 번호
+function lowerBound(b, t) {
+  let lo = 0, hi = b.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid].time < t) lo = mid + 1; else hi = mid; }
+  return lo;
 }
 
 // 차트 시각(초, KST로 민 값) → 논리 봉 번호 (소수 가능, 받은 구간 밖은 봉 간격으로 연장)
@@ -414,13 +491,15 @@ function timeToX(t) {
   const b = ts.logicalToCoordinate(f + 1);
   return b == null ? a : a + (l - f) * (b - a);
 }
+// 데이터의 UTC 초 → 그 시각을 담은 봉의 x
+const barX = utc => timeToX(Math.floor((utc + KST) / sec()) * sec());
 
 // 간격을 바꿔도 같은 시각을 보도록
 // centerMs를 주면 그 시각으로 (북마크), 아니면 지금 보던 시각을 유지
 function switchInterval(iv, { centerMs = null, width = null } = {}) {
   if (iv === S.iv || !IVS[iv]) return;
   const r = ts.getVisibleLogicalRange();
-  const wasLatest = S.atLatest && r && r.to >= S.bars.length - 3;
+  const wasLatest = S.atLatest && r && r.to >= shownLen - 3;
   const centerT = r && S.bars.length ? logicalToTime((r.from + r.to) / 2) : null;
 
   saveCache();
@@ -429,107 +508,36 @@ function switchInterval(iv, { centerMs = null, width = null } = {}) {
   S.iv = iv;
   store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), iv });
   document.querySelectorAll('#ivSeg button').forEach(b => b.classList.toggle('on', b.dataset.iv === iv));
-  connectWs();
 
   const c = cache[iv];
   S.bars = c ? c.bars : [];
-  S.atLatest = c ? c.atLatest : false;
-  S.noMoreLeft = c ? c.noMoreLeft : false;
-  series.setData(S.bars);
+  S.ms = c ? c.ms : [];
+  setEdges();
+  pushSeries(true);
 
   if (centerMs != null) {
     jumpTo(centerMs, { mark: false, width });
+  } else if (blindOn()) {
+    jumpTo(R.now * 1000, { mark: false, pos: 0.75 });
   } else if (wasLatest || centerT == null) {
-    if (c && c.atLatest) { ts.scrollToRealTime(); drawings.refresh(); updateLegend(); backfill(); }
+    if (c && S.atLatest) { ts.scrollToRealTime(); refreshAll(); updateLegend(); }
     else loadLatest();
   } else {
     jumpTo(chartToMs(centerT), { mark: false });
   }
 }
 
-// ───────────────────────── 실시간 (웹소켓)
-const WSs = { ws: null, idx: 0, retry: 0, timer: 0, gotMsg: false };
-
-function setConn(state) {
-  ui.connDot.className = 'dot ' + ({ ok: 'ok', wait: 'wait', bad: 'bad' }[state] || '');
-  ui.connDot.title = { ok: '실시간 연결됨', wait: '연결 중…', bad: '실시간 끊김 — 재연결 시도 중' }[state] || '';
-}
-
-function connectWs() {
-  clearTimeout(WSs.timer);
-  if (WSs.ws) { WSs.ws.onclose = null; WSs.ws.onerror = null; try { WSs.ws.close(); } catch {} }
-  const iv = S.iv;
-  const url = `${WS_BASES[WSs.idx % WS_BASES.length]}${SYMBOL.toLowerCase()}@kline_${iv}`;
-  setConn('wait');
-  let ws;
-  try { ws = new WebSocket(url); } catch { scheduleReconnect(); return; }
-  WSs.ws = ws; WSs.gotMsg = false;
-  ws.onopen = () => { WSs.retry = 0; setConn('ok'); backfill(); };
-  ws.onmessage = ev => {
-    WSs.gotMsg = true;
-    let m; try { m = JSON.parse(ev.data); } catch { return; }
-    const k = m.k; if (!k || k.i !== S.iv) return;
-    onLiveBar({ time: msToChart(k.t), open: +k.o, high: +k.h, low: +k.l, close: +k.c });
-  };
-  ws.onerror = () => {};
-  ws.onclose = () => {
-    if (WSs.ws !== ws) return;
-    if (!WSs.gotMsg) WSs.idx++; // 메시지 한 번도 못 받았으면 다른 주소로
-    setConn('bad');
-    scheduleReconnect();
-  };
-}
-function scheduleReconnect() {
-  clearTimeout(WSs.timer);
-  const delay = Math.min(30000, 1000 * 2 ** WSs.retry++);
-  WSs.timer = setTimeout(connectWs, delay);
-}
-
-function onLiveBar(bar) {
-  ui.livePrice.textContent = fmtPrice(bar.close);
-  document.title = `${fmtPrice(bar.close)} · BTC 심리차트`;
-  if (!S.atLatest || !S.bars.length) return;
-  const last = S.bars[S.bars.length - 1];
-  if (bar.time < last.time) return;
-  if (bar.time === last.time) S.bars[S.bars.length - 1] = bar;
-  else if (bar.time === last.time + sec()) S.bars.push(bar);
-  else { backfill(); return; } // 빈 구간 생김 → REST로 메움
-  series.update(bar);
-  updateLegend();
-}
-
-// 끊겼다 이어졌을 때 빠진 봉을 채운다
-let backfilling = false;
-async function backfill() {
-  if (backfilling || !S.atLatest || !S.bars.length) return;
-  backfilling = true;
-  const gen = S.gen, iv = S.iv;
-  try {
-    for (let round = 0; round < 3; round++) {
-      const last = S.bars[S.bars.length - 1].time;
-      const got = await fetchKlines(iv, { startTime: chartToMs(last) });
-      if (gen !== S.gen || iv !== S.iv) return;
-      applyBars(mergeBars(S.bars, got), 0);
-      if (got.length < PAGE) return;
-    }
-    loadLatest(); // 너무 오래 끊겼으면 최신 구간을 새로 받는다
-  } catch { /* 다음 연결 때 다시 */ }
-  finally { backfilling = false; }
-}
-
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  if (!WSs.ws || WSs.ws.readyState > 1) { WSs.retry = 0; connectWs(); }
-  else backfill();
-});
-
 // ───────────────────────── 범례 (마우스·탭 위치의 봉 OHLC)
 let hoverT = null;
 function updateLegend() {
   const b = S.bars;
   let bar = null;
-  if (hoverT != null) { const i = indexAtOrBefore(hoverT); if (i >= 0 && b[i].time === hoverT) bar = b[i]; }
-  if (!bar) bar = b[b.length - 1];
+  if (hoverT != null) { const i = indexAtOrBefore(hoverT); if (i >= 0 && i < shownLen && b[i].time === hoverT) bar = b[i]; }
+  if (!bar) {
+    // 마우스가 없으면 화면 오른쪽 끝에 보이는 봉 (실시간이 없으니 「마지막 봉」은 의미가 없다)
+    const r = ts.getVisibleLogicalRange();
+    bar = b[Math.max(0, Math.min(shownLen - 1, r ? Math.floor(r.to) : shownLen - 1))];
+  }
   if (!bar) { ui.legend.innerHTML = S.busy ? '<span class="busy">불러오는 중…</span>' : ''; return; }
   const chg = (bar.close - bar.open) / bar.open * 100;
   const cls = bar.close >= bar.open ? 'u' : 'd';
@@ -542,6 +550,242 @@ function updateLegend() {
     `<span class="${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` +
     (S.busy ? '<span class="busy">불러오는 중…</span>' : '');
 }
+
+// ───────────────────────── 관점방 데이터 (posts·trades — 공통설계 §4, 읽기만)
+const vault = {
+  posts: [], trades: [], post: new Map(), trade: new Map(),
+  source: null,  // 'enc'(A안 암호 풀림) | 'file'(B안 가져오기) | 'sample'(가짜 샘플)
+  enc: null,     // A안 암호 봉투 {posts, trades} — 아직 안 풀렸으면 잠김
+};
+const EV_ACT = { entry: 'enter', add: 'add', reduce: 'reduce', stop: 'stop', tp: 'tp', exit: 'exit' };
+const EV_LABEL = { entry: '진입', add: '추가(불타기)', reduce: '분할 정리', stop: '스탑', tp: '익절 예약', exit: '종료' };
+const SIDE_LABEL = { long: '롱', short: '숏' };
+const KIND_LABEL = { signal: '신호', risk: '리스크', view: '관점', routine: '루틴', chat: '기타' };
+
+function setVault(posts, trades, source) {
+  const num = v => typeof v === 'number' && isFinite(v);
+  const ps = (Array.isArray(posts) ? posts : [])
+    .filter(p => p && typeof p.id === 'string' && num(p.t))
+    .map((p, i) => ({ ...p, text: typeof p.text === 'string' ? p.text : '', _i: i }))
+    .sort((a, b) => a.t - b.t || a._i - b._i);
+  const trs = (Array.isArray(trades) ? trades : [])
+    .filter(tr => tr && typeof tr.id === 'string' && Array.isArray(tr.events))
+    .map(tr => ({
+      ...tr,
+      events: tr.events.filter(e => e && num(e.t) && EV_LABEL[e.type])
+        .map((e, i) => ({ ...e, _i: i })).sort((a, b) => a.t - b.t || a._i - b._i),
+      flags: Array.isArray(tr.flags) ? tr.flags : [],
+    }))
+    .filter(tr => tr.events.length)
+    .sort((a, b) => a.events[0].t - b.events[0].t);
+  vault.posts = ps; vault.trades = trs; vault.source = source;
+  vault.post = new Map(ps.map(p => [p.id, p]));
+  vault.trade = new Map(trs.map(tr => [tr.id, tr]));
+  panel.build();
+  refreshAll();
+}
+
+// 매매 요약 (가격이 있는 사건만으로 — 비율 가중 같은 가정은 넣지 않는다)
+function tradeBasics(tr) {
+  const entry = tr.events.find(e => e.type === 'entry');
+  const exits = tr.events.filter(e => e.type === 'exit');
+  const exit = exits[exits.length - 1] || null;
+  const dir = tr.side === 'short' ? -1 : 1;
+  const ep = entry && Number.isFinite(entry.price) ? entry.price : null;
+  const firstStop = tr.events.find(e => e.type === 'stop' && Number.isFinite(e.stop) && (!entry || e.t >= entry.t));
+  return {
+    entry, exit, dir, ep,
+    result: ep && exit && Number.isFinite(exit.price) ? dir * (exit.price - ep) / ep * 100 : null,
+    firstStop,
+    stopDist: ep && firstStop ? Math.abs(firstStop.stop - ep) : null,
+    hold: entry && exit ? exit.t - entry.t : null,
+  };
+}
+// 「리스크 0%」 칸: 메모에 적혀 있거나, 스탑이 첫 진입가를 넘어 수익 쪽으로 간 경우
+function isRisk0(tr, e, ep) {
+  if (/리스크\s*0/.test(e.note || '')) return true;
+  if (ep == null) return false;
+  return tr.side === 'short' ? e.stop <= ep : e.stop >= ep;
+}
+// 보이는 사건인가 (블라인드 중인 매매는 연 사건까지만, 다른 매매는 now 전 사건만)
+function evShown(tr, e) {
+  if (!blindOn()) return true;
+  if (tr === R.trade) return tr.events.indexOf(e) < R.step;
+  return e.t < R.now;
+}
+function nextTradeOpen(tr) {
+  const i = vault.trades.indexOf(tr), n = vault.trades[i + 1];
+  return n ? n.events[0].t : null;
+}
+// 스탑 계단: 설정·이동 시각부터 다음 이동(또는 종료)까지
+function stopSegs(tr) {
+  const evs = tr.events.filter(e => evShown(tr, e));
+  const stops = evs.filter(e => e.type === 'stop' && Number.isFinite(e.stop));
+  if (!stops.length) return [];
+  const { ep, exit } = tradeBasics(tr);
+  const closed = exit && evShown(tr, exit);
+  const last = tr.events[tr.events.length - 1].t;
+  let end = closed ? exit.t : (tr.status === 'closed' && exit ? exit.t : (nextTradeOpen(tr) ?? last + 4 * 3600));
+  if (blindOn()) end = Math.min(end, R.now);
+  let r0 = false;
+  return stops.map((e, i) => {
+    if (isRisk0(tr, e, ep)) r0 = true;
+    const t1 = i + 1 < stops.length ? stops[i + 1].t : end;
+    return { t0: e.t, t1: Math.max(e.t, t1), stop: e.stop, risk0: r0, tail: i + 1 === stops.length && !closed };
+  });
+}
+
+// ───────────────────────── 매매 마커 · 스탑 계단 · 「여기까지」 선 (그림보다 아래 층)
+const marks = (() => {
+  let on = store.get(PREF_KEY, {}).marks !== false;
+  let hits = [];
+  let hl = null; // 강조할 사건 {tr, e}
+  let requestUpdate = () => {};
+  const FONT = "600 10.5px 'IBM Plex Mono', Menlo, monospace";
+
+  function vline(ctx, x, h, color, dash) {
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.2; if (dash) ctx.setLineDash(dash);
+    ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, h); ctx.stroke(); ctx.restore();
+  }
+  function tag(ctx, x, y, text, bg, fg) {
+    ctx.font = FONT; const w = ctx.measureText(text).width + 8;
+    ctx.fillStyle = bg; ctx.fillRect(Math.round(x), Math.round(y), w, 15);
+    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, Math.round(x) + 4, Math.round(y) + 8);
+    return w;
+  }
+
+  function drawTrade(ctx, tr, w) {
+    const sideC = tr.side === 'short' ? C.down : C.up;
+    // 스탑 계단
+    let prevY = null;
+    for (const s of stopSegs(tr)) {
+      const x0 = barX(s.t0), x1 = barX(s.t1), y = series.priceToCoordinate(s.stop);
+      if (x0 == null || x1 == null || y == null) { prevY = null; continue; }
+      const col = s.risk0 ? C.risk0 : C.stop;
+      ctx.save();
+      ctx.strokeStyle = col; ctx.lineWidth = 1.6;
+      if (s.tail) ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(Math.max(x0 + 2, x1), Math.round(y) + 0.5); ctx.stroke();
+      if (prevY != null) {
+        ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.globalAlpha = 0.7;
+        ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, prevY); ctx.lineTo(Math.round(x0) + 0.5, y); ctx.stroke();
+      }
+      ctx.restore();
+      if (x1 - x0 > 70 && x1 > 0 && x0 < w) tag(ctx, Math.max(x0, 0) + 2, y - 17, (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), 'rgba(10,14,20,0.75)', col);
+      prevY = y;
+    }
+    if (!on) return;
+    const coarse = sec() >= 3600; // 1시간봉 이상은 진입·청산만
+    for (const e of tr.events) {
+      if (!evShown(tr, e) || e.type === 'stop') continue;
+      if (coarse && e.type !== 'entry' && e.type !== 'exit') continue;
+      const price = Number.isFinite(e.price) ? e.price : Number.isFinite(e.quoted) ? e.quoted : null;
+      if (price == null) continue;
+      const x = barX(e.t), y = series.priceToCoordinate(price);
+      if (x == null || y == null || x < -20 || x > w + 20) continue;
+      ctx.save();
+      ctx.lineJoin = 'round';
+      if (e.type === 'entry') {
+        const d = tr.side === 'short' ? 1 : -1; // 숏 ▼ / 롱 ▲
+        ctx.fillStyle = sideC; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x, y + d * 6); ctx.lineTo(x - 7, y - d * 6); ctx.lineTo(x + 7, y - d * 6); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      } else if (e.type === 'add') {
+        ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
+        ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
+      } else if (e.type === 'reduce' || e.type === 'tp') {
+        if (e.corrected_by) ctx.globalAlpha = 0.45;
+        ctx.fillStyle = C.reduce; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        const lab = e.type === 'tp' ? 'TP' : `${e.pct ?? '?'}%${e.corrected_by ? ' 정정됨' : ''}`;
+        tag(ctx, x + 7, y - 7, lab, 'rgba(10,14,20,0.75)', C.reduce);
+      } else if (e.type === 'exit') {
+        ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
+        ctx.strokeStyle = C.exit; ctx.lineWidth = 2.5; ctx.stroke();
+      }
+      if (hl && hl.e === e) {
+        ctx.globalAlpha = 1; ctx.strokeStyle = C.btc; ctx.lineWidth = 2; ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.restore();
+      hits.push({ x, y, tr, e });
+    }
+  }
+
+  // 내 스탑(리플레이 답): 적은 시각부터 다음 답까지 보라 점선
+  function drawMine(ctx, w) {
+    if (!R.trade) return;
+    const steps = answers.steps(R.trade.id);
+    const list = Object.keys(steps).map(Number).sort((a, b) => a - b).map(i => steps[i]).filter(a => Number.isFinite(a.now));
+    if (R.draft && Number.isFinite(R.draft.stop)) list.push({ ...R.draft, now: R.now });
+    let cur = null;
+    const flush = until => {
+      if (!cur) return;
+      const x0 = barX(cur.now), x1 = until == null ? w : barX(until), y = series.priceToCoordinate(cur.stop);
+      if (x0 == null || y == null) return;
+      ctx.save(); ctx.strokeStyle = C.mine; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(x1 ?? w, Math.round(y) + 0.5); ctx.stroke(); ctx.restore();
+      tag(ctx, Math.max(0, x0) + 2, y + 3, '내 스탑 ' + fmtAxis(cur.stop), 'rgba(10,14,20,0.75)', C.mine);
+    };
+    for (const a of list) {
+      if (!Number.isFinite(a.stop)) continue;
+      flush(a.now); cur = a;
+    }
+    flush(null);
+  }
+
+  function draw(ctx, w, h) {
+    hits = [];
+    // 고른 글의 시각
+    if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
+    const r = ts.getVisibleLogicalRange();
+    if (vault.trades.length && r && S.bars.length) {
+      const lo = logicalToTime(Math.floor(r.from)) - KST - 86400, hi = logicalToTime(Math.ceil(r.to)) - KST + 86400;
+      for (const tr of vault.trades) {
+        const a = tr.events[0].t, b = Math.max(tr.events[tr.events.length - 1].t, nextTradeOpen(tr) ?? 0);
+        if (b < lo || a > hi) continue;
+        if (blindOn() && a >= R.now && tr !== R.trade) continue;
+        drawTrade(ctx, tr, w);
+      }
+    }
+    drawMine(ctx, w);
+    // 리플레이 「여기까지」
+    if (R.trade) {
+      const x = timeToX(R.now + KST - (R.now + KST) % sec());
+      if (x != null && x >= -2 && x <= w + 2) {
+        vline(ctx, x, h, R.blind ? C.now : 'rgba(247,147,26,0.45)', R.blind ? null : [6, 4]);
+        tag(ctx, Math.min(x + 3, w - 80), h - 19, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
+      }
+    }
+  }
+
+  const views = [{ zOrder: () => 'top', renderer: () => ({ draw: tg => tg.useMediaCoordinateSpace(({ context, mediaSize }) => draw(context, mediaSize.width, mediaSize.height)) }) }];
+  series.attachPrimitive({
+    attached: p => { requestUpdate = p.requestUpdate; },
+    detached: () => { requestUpdate = () => {}; },
+    updateAllViews: () => {},
+    paneViews: () => views,
+  });
+
+  return {
+    refresh: () => requestUpdate(),
+    isOn: () => on,
+    toggle() {
+      on = !on;
+      store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), marks: on });
+      $('markBtn').classList.toggle('on', on);
+      requestUpdate();
+    },
+    hitTest(px, py, tol = 14) {
+      let best = null, bd = tol;
+      for (const hh of hits) { const d = Math.hypot(px - hh.x, py - hh.y); if (d < bd) { bd = d; best = hh; } }
+      return best;
+    },
+    highlight(tr, e) { hl = tr && e ? { tr, e } : null; requestUpdate(); },
+  };
+})();
 
 // ───────────────────────── 색 (트레이딩뷰 기본 10색에서 남보라를 빼고 흰색을 넣음)
 const PALETTE = ['#ffffff', '#f23645', '#ff9800', '#ffeb3b', '#4caf50', '#089981', '#00bcd4', '#2962ff', '#9c27b0', '#e91e63'];
@@ -953,7 +1197,7 @@ $('hintEditText').addEventListener('click', () => {
   const d = drawings.get(drawings.getSel());
   if (d && d.type === 'text') openTextModal({ mode: 'edit', id: d.id }, d.text);
 });
-$('hintCancel').addEventListener('click', () => { select(null); setTool(null); });
+$('hintCancel').addEventListener('click', () => { R.pick = false; select(null); setTool(null); });
 $('hintDelete').addEventListener('click', () => { const id = drawings.getSel(); select(null); if (id) drawings.remove(id); });
 
 function pointAt(x, y) {
@@ -1034,11 +1278,13 @@ chartEl.addEventListener('pointerup', endTap, true);
 chartEl.addEventListener('pointercancel', endTap, true);
 
 function onTap(x, y) {
+  if (R.pick) { replay.pickAt(y); return; } // 리플레이: 내 스탑 자리 찍기
   if (!tool) {
-    // 도구 없이 탭: 그림을 고르면 수정 모드, 빈 곳이면 해제
+    // 도구 없이 탭: 그림을 고르면 수정 모드, 매매 마커면 원문 카드, 빈 곳이면 해제
     const sid = drawings.getSel();
     if (sid && drawings.hitTest(x, y, 22, sid)) return;
     const hit = drawings.hitTest(x, y, 18);
+    if (!hit && !sid) { const m = marks.hitTest(x, y); if (m) { openCard(m.tr, m.e); return; } }
     select(hit ? hit.id : null);
     return;
   }
@@ -1065,17 +1311,678 @@ function onTap(x, y) {
   setTool(null);
 }
 
-chart.subscribeCrosshairMove(param => {
-  hoverT = param.time ?? null;
-  updateLegend();
-  if (!tool || !param.point) { if (tool === 'erase') drawings.setHot(null); return; }
-  if (tool === 'erase') {
-    const hit = drawings.hitTest(param.point.x, param.point.y);
-    drawings.setHot(hit ? hit.id : null);
-  } else if (tool === 'box' && drawings.getPending()) {
-    const pt = pointAt(param.point.x, param.point.y);
-    if (pt) drawings.setPreview(pt);
+function refreshAll() { drawings.refresh(); marks.refresh(); }
+
+// ───────────────────────── A안: 암호화된 글·장부 풀기 (PBKDF2-SHA256 → AES-GCM, tools/encrypt_data.py와 짝)
+// 봉투: { v:1, alg:'AES-256-GCM', kdf:'PBKDF2-SHA256', iter, salt, iv, ct }  (base64, ct는 암호문+태그)
+const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const b64e = u8 => { let s = ''; for (const b of u8) s += String.fromCharCode(b); return btoa(s); };
+
+async function loadEnvelopes() {
+  const get = async name => {
+    const r = await fetch(`data/${name}.enc`, { cache: 'no-cache' });
+    if (!r.ok) return null;
+    try { return await r.json(); } catch { return null; }
+  };
+  const [posts, trades] = await Promise.all([get('posts'), get('trades')]);
+  const ok = e => e && e.v === 1 && e.salt && e.iv && e.ct && Number.isFinite(e.iter);
+  return ok(posts) && ok(trades) ? { posts, trades } : null;
+}
+async function deriveKey(pw, env) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: b64d(env.salt), iterations: env.iter },
+    base, { name: 'AES-GCM', length: 256 }, true, ['decrypt']);
+}
+async function openEnvelope(key, env) {
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(env.iv) }, key, b64d(env.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+const sameKdf = E => E.posts.salt === E.trades.salt && E.posts.iter === E.trades.iter;
+
+async function unlockWithPassword(pw, remember) {
+  const E = vault.enc;
+  if (!window.crypto || !crypto.subtle) throw new Error('이 주소에서는 브라우저 암호 기능을 쓸 수 없습니다 (https 또는 localhost 필요)');
+  const k1 = await deriveKey(pw, E.posts);
+  const k2 = sameKdf(E) ? k1 : await deriveKey(pw, E.trades);
+  const posts = await openEnvelope(k1, E.posts);
+  const trades = await openEnvelope(k2, E.trades);
+  if (remember && k1 === k2) {
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', k1));
+    store.set(KEY_KEY, { salt: E.posts.salt, key: b64e(raw) });
   }
+  setVault(posts, trades, 'enc');
+}
+async function unlockWithSaved() {
+  const E = vault.enc, saved = store.get(KEY_KEY, null);
+  if (!saved || saved.salt !== E.posts.salt || !sameKdf(E) || !window.crypto || !crypto.subtle) return false;
+  try {
+    const key = await crypto.subtle.importKey('raw', b64d(saved.key), { name: 'AES-GCM' }, false, ['decrypt']);
+    setVault(await openEnvelope(key, E.posts), await openEnvelope(key, E.trades), 'enc');
+    return true;
+  } catch {
+    store.del(KEY_KEY); // 파일이 새 비번으로 바뀌었으면 기억한 키는 버린다
+    return false;
+  }
+}
+
+async function initVault() {
+  if (new URLSearchParams(location.search).has('sample')) {
+    try {
+      const [p, t] = await Promise.all([fetchJson('docs/sample_posts.json'), fetchJson('docs/sample_trades.json')]);
+      setVault(p, t, 'sample');
+    } catch (e) { toast('샘플을 읽지 못했습니다', { error: true, detail: e.message }); }
+    return;
+  }
+  let env = null;
+  try { env = await loadEnvelopes(); } catch { env = null; }
+  if (env) {
+    vault.enc = env;
+    if (!(await unlockWithSaved())) panel.build();
+    return;
+  }
+  const local = store.get(LOCAL_KEY, null);
+  if (local && Array.isArray(local.posts)) { setVault(local.posts, local.trades, 'file'); return; }
+  panel.build();
+}
+
+// B안: 파일 가져오기 (posts.json · trades.json, 한 번에 둘 다 골라도 됨)
+$('vaultFile').addEventListener('change', async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  if (!files.length) return;
+  let posts = vault.source === 'file' ? vault.posts : null, trades = vault.source === 'file' ? vault.trades : null;
+  try {
+    for (const f of files) {
+      const d = JSON.parse(await f.text());
+      if (d && !Array.isArray(d) && (d.posts || d.trades)) { posts = d.posts || posts; trades = d.trades || trades; continue; }
+      if (!Array.isArray(d)) throw new Error(`${f.name}: 배열이 아닙니다`);
+      if (d.length && Array.isArray(d[0].events)) trades = d; else posts = d;
+    }
+  } catch (err) { toast('파일을 읽지 못했습니다', { error: true, detail: err.message }); return; }
+  setVault(posts || [], trades || [], 'file');
+  const saved = store.set(LOCAL_KEY, { posts: posts || [], trades: trades || [] });
+  toast(`글 ${vault.posts.length}개 · 매매 ${vault.trades.length}개를 가져왔습니다${saved ? '' : ' (이 기기에 저장은 못 함 — 새로 열면 다시 가져오기)'}`, { ms: 5000 });
+});
+
+function openLock() {
+  $('lockPw').value = '';
+  openModal('lockModal');
+  setTimeout(() => $('lockPw').focus(), 0);
+}
+async function doUnlock() {
+  const pw = $('lockPw').value;
+  if (!pw) return;
+  $('lockOk').disabled = true; $('lockOk').textContent = '여는 중…';
+  try {
+    await unlockWithPassword(pw, $('lockRemember').checked);
+    closeModal($('lockModal'));
+    toast(`글 ${vault.posts.length}개 · 매매 ${vault.trades.length}개를 열었습니다`);
+  } catch (e) {
+    toast(e.name === 'OperationError' ? '비밀번호가 맞지 않습니다' : '열지 못했습니다', { error: true, detail: e.name === 'OperationError' ? '' : e.message });
+  } finally {
+    $('lockOk').disabled = false; $('lockOk').textContent = '열기';
+    $('lockPw').value = '';
+  }
+}
+$('lockOk').addEventListener('click', doUnlock);
+$('lockPw').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doUnlock(); } });
+
+// ───────────────────────── 관점 패널 (posts 타임라인 — 원문 그대로, 줄바꿈 유지)
+const panel = (() => {
+  const body = $('postList'), empty = $('sideEmpty');
+  const prefs0 = store.get(PREF_KEY, {});
+  let filter = ['all', 'view', 'signal'].includes(prefs0.filter) ? prefs0.filter : 'all';
+  let q = '';
+  let items = [];      // {p, el} — 시간순
+  let sel = null;      // 고른 글 id
+  let near = null;
+  let follow = prefs0.follow !== false;
+  let holdUntil = 0;   // 손으로 목록을 움직인 직후엔 따라가기를 잠깐 멈춘다
+  let followQueued = false;
+
+  $('followChk').checked = follow;
+  document.querySelectorAll('#kindChips button').forEach(b => b.classList.toggle('on', b.dataset.f === filter));
+
+  const matchKind = p => filter === 'all' || (filter === 'view' ? p.kind === 'view' : p.kind === 'signal' || p.kind === 'risk');
+  const shown = p => !blindOn() || p.t < R.now || p.t <= R.shownT;
+
+  function emptyState() {
+    empty.innerHTML = '';
+    let html;
+    if (vault.enc && !vault.posts.length) {
+      html = `<b>🔒 글·장부가 잠겨 있습니다.</b><br>비밀번호를 넣으면 이 브라우저 안에서만 풀립니다. 차트는 비밀번호 없이도 그대로 볼 수 있습니다.
+        <div class="row"><button class="btn accent" data-act="lock">비밀번호 입력</button></div>`;
+    } else if (!vault.posts.length) {
+      html = `<b>관점방 글·장부 파일이 아직 없습니다.</b><br>
+        장부 세션이 암호화 파일(<code>data/posts.enc</code>·<code>data/trades.enc</code>)을 올리면 비밀번호로 열립니다.
+        지금은 기기에 있는 <code>posts.json</code>·<code>trades.json</code>을 직접 넣거나(B안), 가짜 샘플로 화면을 볼 수 있습니다.
+        <div class="row"><button class="btn accent" data-act="file">파일 가져오기</button><button class="btn" data-act="sample">샘플로 보기</button></div>`;
+    } else return false;
+    empty.innerHTML = html;
+    empty.querySelector('[data-act=lock]')?.addEventListener('click', openLock);
+    empty.querySelector('[data-act=file]')?.addEventListener('click', () => $('vaultFile').click());
+    empty.querySelector('[data-act=sample]')?.addEventListener('click', () => { location.search = '?sample=1'; });
+    return true;
+  }
+
+  function el(p) {
+    const d = document.createElement('div');
+    const kind = KIND_LABEL[p.kind] ? p.kind : 'chat';
+    d.className = `post k-${kind}`;
+    d.style.setProperty('--k', `var(--k-${kind})`);
+    d.dataset.id = p.id;
+    const tr = p.trade && vault.trade.get(p.trade);
+    d.innerHTML = `<div class="ph"><span>${fmtUtc(p.t)}</span><span class="kd">${KIND_LABEL[kind]}</span>${tr ? `<button class="tr" title="이 매매 보기">${esc(tr.id)}</button>` : ''}</div>`;
+    const tx = document.createElement('div');
+    tx.className = 'tx' + (p.photo ? ' photo' : '');
+    tx.textContent = p.photo ? '📷 사진(내보내기에 없음)' : p.text; // 원문 그대로 — 고치거나 줄이지 않는다
+    d.appendChild(tx);
+    return d;
+  }
+
+  function build() {
+    const has = vault.posts.length > 0;
+    body.hidden = !has;
+    empty.hidden = !emptyState();
+    $('sampleBadge').innerHTML = vault.source === 'sample' ? ' <span class="badge-sample">샘플</span>' : '';
+    body.innerHTML = '';
+    items = [];
+    if (!has) { $('sideCount').textContent = ''; return; }
+    const ql = q.trim().toLowerCase();
+    const frag = document.createDocumentFragment();
+    for (const p of vault.posts) {
+      if (!matchKind(p)) continue;
+      if (ql && !p.text.toLowerCase().includes(ql)) continue;
+      const e = el(p);
+      if (p.id === sel) e.classList.add('sel');
+      items.push({ p, el: e });
+      frag.appendChild(e);
+    }
+    body.appendChild(frag);
+    applyBlind();
+  }
+
+  function applyBlind() {
+    let n = 0;
+    for (const it of items) { const s = shown(it.p); it.el.hidden = !s; if (s) n++; }
+    $('sideCount').textContent = items.length ? `${n}${n !== vault.posts.length ? ` / ${vault.posts.length}` : ''}` : '';
+    near = null;
+    doFollow(true);
+  }
+
+  // 목록 안에서만 스크롤 (페이지·폰 화면이 같이 움직이지 않게)
+  function scrollToEl(e, force) {
+    const top = e.offsetTop - body.offsetTop, bot = top + e.offsetHeight;
+    if (!force && top >= body.scrollTop && bot <= body.scrollTop + body.clientHeight) return;
+    body.scrollTop = top - body.clientHeight / 2 + e.offsetHeight / 2;
+  }
+
+  // 차트 가운데 시각에 가장 가까운(그 시각 이전의 마지막) 글로 따라간다
+  function doFollow(force = false) {
+    if (!items.length || !S.bars.length) return;
+    if (!force && (!follow || performance.now() < holdUntil)) return;
+    if (force && !follow) return;
+    const r = ts.getVisibleLogicalRange(); if (!r) return;
+    const center = logicalToTime((r.from + r.to) / 2) - KST;
+    let best = null;
+    for (const it of items) { if (it.el.hidden) continue; if (it.p.t <= center) best = it; else { if (!best) best = it; break; } }
+    if (!best || best === near) return;
+    near?.el.classList.remove('near');
+    near = best; near.el.classList.add('near');
+    scrollToEl(near.el, false);
+  }
+  function followSoon() {
+    if (followQueued) return;
+    followQueued = true;
+    requestAnimationFrame(() => { followQueued = false; doFollow(); });
+  }
+
+  function select(id, { jump = true, scroll = true } = {}) {
+    sel = id;
+    for (const it of items) it.el.classList.toggle('sel', it.p.id === id);
+    const p = vault.post.get(id);
+    marks.refresh();
+    if (!p) return;
+    const it = items.find(x => x.p.id === id);
+    if (it && scroll) scrollToEl(it.el, true);
+    if (jump) {
+      holdUntil = performance.now() + 1500;
+      jumpTo(p.t * 1000, { mark: false });
+    }
+  }
+
+  body.addEventListener('click', e => {
+    const d = e.target.closest('.post'); if (!d) return;
+    const p = vault.post.get(d.dataset.id); if (!p) return;
+    if (e.target.closest('.tr')) { const tr = vault.trade.get(p.trade); if (tr) openCard(tr, tr.events.find(x => x.post === p.id)); return; }
+    select(p.id);
+  });
+  for (const ev of ['wheel', 'touchstart', 'pointerdown']) body.addEventListener(ev, () => { holdUntil = performance.now() + 2500; }, { passive: true });
+
+  document.querySelectorAll('#kindChips button').forEach(b => b.addEventListener('click', () => {
+    filter = b.dataset.f;
+    document.querySelectorAll('#kindChips button').forEach(x => x.classList.toggle('on', x === b));
+    store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), filter });
+    build();
+  }));
+  let qTimer = 0;
+  $('postSearch').addEventListener('input', e => { clearTimeout(qTimer); qTimer = setTimeout(() => { q = e.target.value; build(); }, 200); });
+  $('followChk').addEventListener('change', e => {
+    follow = e.target.checked;
+    store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), follow });
+    if (follow) { holdUntil = 0; doFollow(); }
+  });
+
+  return {
+    build, applyBlind, select,
+    follow: followSoon,
+    refollow() { near?.el.classList.remove('near'); near = null; doFollow(true); }, // 숨어 있던 서랍을 열 때
+    selT: () => (sel && vault.post.get(sel) ? vault.post.get(sel).t : null),
+  };
+})();
+
+// 패널 켜기/끄기 (PC) · 서랍 열기/닫기 (폰 세로)
+const appEl = document.querySelector('.app');
+function setSide(on) {
+  appEl.classList.toggle('noside', !on);
+  $('sideBtn').classList.toggle('on', on);
+  store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), side: on });
+}
+$('sideBtn').addEventListener('click', () => setSide(appEl.classList.contains('noside')));
+$('drawerGrip').addEventListener('click', () => {
+  const open = $('side').classList.toggle('open');
+  $('gripArrow').textContent = open ? '▾' : '▴';
+  if (open) panel.refollow();
+});
+$('markBtn').addEventListener('click', () => marks.toggle());
+
+// ───────────────────────── 매매 카드 (마커·매매 칩 탭 → 원문 + 요약)
+// MFE/MAE: 진입~종료 사이 1분봉 고가·저가 (첫 진입가 대비)
+async function excursion(tr) {
+  const { entry, exit, dir, ep } = tradeBasics(tr);
+  if (!entry || !exit || ep == null) return null;
+  const a = entry.t, b = exit.t;
+  const months = new Set([ymOf(a + KST), ymOf(b + KST)]);
+  const all = klines.months('1m');
+  const bars = await loadMonths('1m', [...months].filter(m => all.includes(m)));
+  let hi = -Infinity, lo = Infinity;
+  for (const x of bars) {
+    const u = x.time - KST;
+    if (u < a || u >= b + 60) continue; // 종료 분의 봉까지
+    if (x.high > hi) hi = x.high; if (x.low < lo) lo = x.low;
+  }
+  if (!Number.isFinite(hi)) return null;
+  const up = (hi - ep) / ep * 100, down = (lo - ep) / ep * 100;
+  return dir > 0 ? { mfe: up, mae: down } : { mfe: -down, mae: -up };
+}
+
+function evDetail(e) {
+  const bits = [];
+  if (Number.isFinite(e.price)) bits.push(`@ ${fmtPrice(e.price)}`);
+  if (e.type === 'reduce' && e.pct != null) bits.push(`${e.pct}%`);
+  if (e.type === 'stop' && Number.isFinite(e.stop)) bits.push(`→ ${fmtPrice(e.stop)}`);
+  if (Number.isFinite(e.quoted)) bits.push(`(글의 숫자 ${e.quoted})`);
+  return bits.join(' ');
+}
+function postText(id) {
+  const p = id && vault.post.get(id);
+  if (!p) return '';
+  return p.photo ? '📷 사진(내보내기에 없음)' : p.text;
+}
+
+let cardTrade = null;
+async function openCard(tr, hitEv = null) {
+  cardTrade = tr;
+  marks.highlight(tr, hitEv);
+  const live = blindOn() && tr === R.trade && R.step < tr.events.length; // 리플레이 중이면 앞날은 숨김
+  const evs = tr.events.filter(e => evShown(tr, e));
+  const B = tradeBasics(tr);
+  const head = `<h3><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || tr.side}</span> ${esc(tr.id)} · ${fmtUtc(B.entry ? B.entry.t : tr.events[0].t)}</h3>
+    <div class="row" style="margin-top:4px">${tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
+    ${tr.confidence === 'low' ? '<span class="flag low">확인 필요(confidence: low)</span>' : ''}
+    ${tr.status && tr.status !== 'closed' ? `<span class="flag">${esc(tr.status)}</span>` : ''}</div>`;
+  const kv = live ? '<p class="sub" style="margin-top:10px">리플레이 중 — 요약은 끝나면 보입니다.</p>' : `<dl class="kv">
+    <dt>진입가</dt><dd>${B.ep != null ? fmtPrice(B.ep) : '—'}</dd>
+    <dt>첫 스탑 거리</dt><dd>${B.stopDist != null ? `${fmtPrice(B.stopDist)} (${(B.stopDist / B.ep * 100).toFixed(2)}%)` : '—'}</dd>
+    <dt>보유 시간</dt><dd>${B.hold != null ? fmtDur(B.hold) : '종료 기록 없음'}</dd>
+    <dt>MFE / MAE</dt><dd id="cardExc">${B.exit ? '계산 중…' : '—'}</dd>
+    <dt>결과</dt><dd><span class="res ${B.result == null ? 'n' : B.result >= 0 ? 'u' : 'd'}">${fmtPct(B.result)}</span> <span style="color:var(--text-sub);font-size:11px">첫 진입가 → 종료가</span></dd>
+  </dl>`;
+  const list = evs.map(e => `<li class="${e === hitEv ? 'hit' : ''} ${e.corrected_by ? 'corr' : ''}">
+      <div class="eh"><span>${fmtUtc(e.t)}</span><b>${EV_LABEL[e.type]}</b><span>${esc(evDetail(e))}</span>
+      ${e.corrected_by ? `<span class="note">정정됨 → ${esc(e.corrected_by)}</span>` : ''}</div>
+      ${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}
+      ${e.post ? `<div class="tx">${esc(postText(e.post))}</div>` : ''}</li>`).join('');
+  const plans = (tr.plans || []).filter(pl => !blindOn() || pl.t < R.now || pl.t <= R.shownT)
+    .map(pl => `<li><div class="eh"><span>${fmtUtc(pl.t)}</span><b>계획</b><span>(사건 아님)</span></div><div class="tx">${esc(postText(pl.post))}</div></li>`).join('');
+  $('cardBody').innerHTML = `${head}${kv}<div class="label">사건 ${evs.length}${live ? ` / ${tr.events.length}` : ''}</div><ul class="evs">${list}</ul>
+    ${plans ? `<div class="label">계획 메시지</div><ul class="evs">${plans}</ul>` : ''}
+    <div class="row end">
+      ${R.trade ? '' : '<button class="btn" id="cardGo">차트에서 보기</button><button class="btn accent" id="cardReplay">이 매매 리플레이</button>'}
+      <button class="btn" data-close>닫기</button>
+    </div>`;
+  $('cardGo')?.addEventListener('click', () => { closeModal($('cardModal')); showTrade(tr); });
+  $('cardReplay')?.addEventListener('click', () => { closeModal($('cardModal')); replay.start(tr); });
+  openModal('cardModal');
+  if (!live && B.exit) {
+    try {
+      const x = await excursion(tr);
+      if (cardTrade === tr && $('cardExc')) $('cardExc').textContent = x ? `${fmtPct(x.mfe)} / ${fmtPct(x.mae)}` : '— (그 달 1분봉 없음)';
+    } catch (e) { if ($('cardExc')) $('cardExc').textContent = '— (1분봉을 읽지 못함)'; }
+  }
+}
+// 매매 전체가 보이게 이동
+function showTrade(tr) {
+  const a = tr.events[0].t, b = tr.events[tr.events.length - 1].t;
+  const span = Math.max(60, (b - a) / sec());
+  jumpTo((a + (b - a) / 2) * 1000, { mark: false, width: Math.max(80, span * 1.6) });
+}
+
+// ───────────────────────── 리플레이 답 (브라우저 저장 — 내보내기에 포함)
+// { [매매 id]: { trade, side, open, updatedAt, steps: { [사건 번호]: { act, side?, stop?, memo?, now, iv, at } } } }
+// 사건 번호 i = 그의 i번째 사건(0 = 진입)을 열기 직전에 적은 내 판단
+const answers = (() => {
+  const okStep = a => a && typeof a.act === 'string';
+  let all = store.get(ANS_KEY, {}) || {};
+  if (typeof all !== 'object' || Array.isArray(all)) all = {};
+  const persist = () => { if (!store.set(ANS_KEY, all)) toast('이 브라우저에 저장하지 못했습니다 — 내보내기로 백업하세요', { error: true, ms: 6000 }); };
+  return {
+    all: () => JSON.parse(JSON.stringify(all)),
+    count: () => Object.keys(all).filter(k => Object.keys(all[k].steps || {}).length).length,
+    steps: id => (all[id] && all[id].steps) || {},
+    set(tr, i, a) {
+      const rec = all[tr.id] || (all[tr.id] = { trade: tr.id, side: tr.side, open: tr.events[0].t, steps: {} });
+      rec.steps[i] = { ...a, at: new Date().toISOString() };
+      rec.updatedAt = rec.steps[i].at;
+      persist();
+    },
+    clear(id) { delete all[id]; persist(); },
+    // 합치기: 없는 답은 더하고, 같은 자리는 나중에 적은 것(at)을 남긴다
+    importMany(obj) {
+      if (!obj || typeof obj !== 'object') return 0;
+      let n = 0;
+      for (const [id, rec] of Object.entries(obj)) {
+        if (!rec || typeof rec.steps !== 'object') continue;
+        const mine = all[id] || (all[id] = { trade: id, side: rec.side, open: rec.open, steps: {} });
+        for (const [i, a] of Object.entries(rec.steps)) {
+          if (!okStep(a)) continue;
+          const cur = mine.steps[i];
+          if (!cur || String(a.at || '') > String(cur.at || '')) { mine.steps[i] = a; n++; }
+        }
+        mine.updatedAt = Object.values(mine.steps).map(a => a.at || '').sort().pop();
+      }
+      persist();
+      return n;
+    },
+  };
+})();
+
+const ACTS0 = [['enter', '들어간다'], ['skip', '안 들어간다']];
+const ACTS = [['hold', '유지'], ['stop', '스탑 이동'], ['reduce', '일부 정리'], ['add', '추가(불타기)'], ['tp', '익절 예약'], ['exit', '종료']];
+const ACT_LABEL = Object.fromEntries([...ACTS0, ...ACTS]);
+
+// ───────────────────────── 리플레이 (블라인드 → 나라면? → 다음 사건 → … → 나란히 보기)
+const replay = (() => {
+  const bar = $('rbar'), wrap = document.querySelector('.chart-wrap');
+  const evs = () => R.trade.events;
+
+  function start(tr) {
+    stopPlay();
+    closeModal($('tradeModal'));
+    R.trade = tr; R.step = 0; R.shownT = -Infinity; R.blind = true; R.draft = null;
+    R.now = tr.events[0].t; // 진입 시각 직전 봉까지만
+    marks.highlight(null);
+    bar.hidden = false; wrap.classList.add('replaying');
+    pushSeries(true);
+    panel.applyBlind();
+    update();
+    jumpTo(R.now * 1000, { mark: false, pos: 0.75, width: 160 });
+    setTimeout(openMine, 350);
+  }
+
+  function end() {
+    stopPlay();
+    R.trade = null; R.draft = null; R.pick = false;
+    bar.hidden = true; wrap.classList.remove('replaying');
+    pushSeries(true);
+    panel.applyBlind();
+    refreshAll(); updateLegend();
+  }
+
+  // 지금 칸이 화면 오른쪽 안에 보이도록
+  function keepInView() {
+    const r = ts.getVisibleLogicalRange(); if (!r) return;
+    const idx = shownLen - 1, width = r.to - r.from;
+    if (idx > r.to - 6 || idx < r.from) ts.setVisibleLogicalRange({ from: idx - width * 0.75, to: idx + width * 0.25 });
+  }
+  async function ensureBars() {
+    for (let k = 0; k < 3; k++) {
+      const last = S.bars[S.bars.length - 1];
+      if (!last || last.time - KST + sec() >= R.now || S.atLatest) return;
+      await loadRight();
+    }
+  }
+  async function moved() {
+    await ensureBars();
+    pushSeries();
+    keepInView();
+    panel.applyBlind();
+    update();
+    refreshAll(); updateLegend();
+  }
+
+  // ▶ 1봉 — 다음 사건 시각에서 멈춘다 (그 전에 「나라면?」을 적을 수 있게)
+  async function step() {
+    if (!R.trade) return false;
+    const s = sec(), nx = R.step < evs().length ? evs()[R.step].t : Infinity;
+    let t = Math.floor(R.now / s) * s + s;
+    if (t > nx) {
+      if (R.now < nx) t = nx;
+      else { stopPlay(); toast('그의 다음 사건 시각입니다 — 「나라면?」을 적고 「다음 사건」을 여세요', { ms: 3000 }); return false; }
+    }
+    if (t * 1000 > klines.endMs() + 60000) { stopPlay(); toast('데이터 끝입니다 (2024-12-06)'); return false; }
+    R.now = t;
+    await moved();
+    return true;
+  }
+
+  // ▶▶ 다음 사건 — 그의 실제 행동 하나를 원문과 함께 연다
+  async function next() {
+    if (!R.trade) return;
+    stopPlay();
+    if (R.step >= evs().length) { finish(); return; }
+    const e = evs()[R.step];
+    R.now = Math.max(R.now, e.t);
+    R.step++; R.shownT = e.t; R.draft = null;
+    await moved();
+    if (e.post) panel.select(e.post, { jump: false });
+    marks.highlight(R.trade, e);
+    if (R.step >= evs().length) toast(R.trade.status === 'closed' ? '마지막 사건입니다 — 「끝 · 나란히 보기」' : '기록된 사건은 여기까지입니다 (종료 기록 없음)', { ms: 3500 });
+  }
+
+  function play() {
+    if (R.timer) { stopPlay(); return; }
+    const sp = +$('rbSpeed').value || 3;
+    let busy = false;
+    R.timer = setInterval(async () => {
+      if (busy) return; busy = true;
+      try { if (!(await step())) stopPlay(); } finally { busy = false; }
+    }, 1000 / sp);
+    $('rbPlay').classList.add('on');
+  }
+  function stopPlay() {
+    clearInterval(R.timer); R.timer = 0;
+    $('rbPlay').classList.remove('on');
+  }
+
+  function toggleBlind() {
+    R.blind = !R.blind;
+    pushSeries(true);
+    panel.applyBlind();
+    update(); refreshAll(); updateLegend();
+  }
+
+  function update() {
+    if (!R.trade) return;
+    const tr = R.trade, n = evs().length;
+    $('rbTitle').textContent = `${tr.id} ${SIDE_LABEL[tr.side] || ''}`;
+    const mine = answers.steps(tr.id)[R.step];
+    $('rbInfo').textContent = `${fmtUtc(R.now)} · 사건 ${R.step}/${n}${R.blind ? '' : ' · 전체 보기'}${mine ? ' · ✍ 적음' : ''}`;
+    const last = R.step > 0 ? evs()[R.step - 1] : null;
+    $('rbEvent').innerHTML = last
+      ? `<span class="who">${fmtUtc(last.t, false)} ${EV_LABEL[last.type]} ${esc(evDetail(last))}</span>${esc(postText(last.post))}`
+      : '';
+    $('rbNext').innerHTML = R.step >= n ? '끝<span class="lbl2">&nbsp;· 나란히 보기</span>' : '▶▶<span class="lbl2">&nbsp;다음 사건</span>';
+    $('rbBlind').classList.toggle('on', R.blind);
+    $('rbBlind').textContent = R.blind ? '블라인드' : '전체 보기';
+  }
+
+  // 나라면? — 지금 칸(R.step)에 대한 내 판단
+  function openMine() {
+    if (!R.trade) return;
+    const first = R.step === 0;
+    const cur = R.draft || { ...(answers.steps(R.trade.id)[R.step] || {}) };
+    R.draft = cur;
+    $('mineTitle').textContent = first ? '나라면? — 진입 전' : `나라면? — 사건 ${R.step + 1}/${evs().length} 전`;
+    const acts = first ? ACTS0 : ACTS;
+    const box = $('mineActs'); box.innerHTML = '';
+    for (const [k, label] of acts) {
+      const b = document.createElement('button'); b.className = 'btn' + (cur.act === k ? ' on' : ''); b.textContent = label;
+      b.addEventListener('click', () => { cur.act = k; [...box.children].forEach(x => x.classList.toggle('on', x === b)); syncMine(); });
+      box.appendChild(b);
+    }
+    $('mineMemo').value = cur.memo || '';
+    syncMine();
+    openModal('mineModal');
+  }
+  function syncMine() {
+    const cur = R.draft || {};
+    const first = R.step === 0;
+    $('mineSideRow').hidden = !(first && cur.act === 'enter');
+    document.querySelectorAll('#mineSides button').forEach(b => b.classList.toggle('on', b.dataset.side === cur.side));
+    $('mineStop').textContent = Number.isFinite(cur.stop) ? fmtPrice(cur.stop) : '—';
+    marks.refresh();
+  }
+  document.querySelectorAll('#mineSides button').forEach(b => b.addEventListener('click', () => { if (R.draft) { R.draft.side = b.dataset.side; syncMine(); } }));
+  $('minePick').addEventListener('click', () => {
+    if (!R.draft) return;
+    R.draft.memo = $('mineMemo').value;
+    closeModal($('mineModal'));
+    setTool(null); select(null);
+    R.pick = true;
+    showHint('스탑 자리 — 차트에서 가격을 탭하세요');
+  });
+  $('mineStopClear').addEventListener('click', () => { if (R.draft) { delete R.draft.stop; syncMine(); } });
+  $('mineSave').addEventListener('click', () => {
+    const d = R.draft; if (!d || !R.trade) return;
+    d.memo = $('mineMemo').value.trim();
+    if (!d.act) { toast('행동을 하나 고르세요', { error: true, ms: 2000 }); return; }
+    if (R.step === 0 && d.act === 'enter' && !d.side) { toast('방향(롱/숏)을 고르세요', { error: true, ms: 2000 }); return; }
+    const a = { act: d.act, now: R.now, iv: S.iv };
+    if (R.step === 0 && d.act === 'enter') a.side = d.side;
+    if (Number.isFinite(d.stop)) a.stop = d.stop;
+    if (d.memo) a.memo = d.memo;
+    answers.set(R.trade, R.step, a);
+    R.draft = null;
+    closeModal($('mineModal'));
+    update(); marks.refresh();
+    toast('적었습니다 — 「다음 사건」으로 그의 행동을 여세요', { ms: 2200 });
+  });
+  // 차트 탭으로 스탑 찍기 (onTap에서 부른다)
+  function pickAt(y) {
+    const p = series.coordinateToPrice(y);
+    R.pick = false; showHint(null);
+    if (p == null || !R.draft) return;
+    R.draft.stop = Math.round(p * 100) / 100;
+    openModal('mineModal');
+    syncMine();
+  }
+  $('mineModal').addEventListener('click', e => {
+    // 닫기·바깥 탭으로 닫으면 적던 것은 버린다 (저장한 답은 그대로)
+    if (e.target === $('mineModal') || e.target.hasAttribute('data-close')) { R.draft = null; marks.refresh(); }
+  });
+
+  // 끝: 그의 전 과정과 내 판단을 나란히 (같은 행동인가만 — 잘잘못 판정 없음)
+  function finish() {
+    const tr = R.trade; if (!tr) return;
+    const steps = answers.steps(tr.id);
+    let same = 0, diff = 0, none = 0;
+    const rows = tr.events.map((e, i) => {
+      const a = steps[i];
+      let m = 'none';
+      if (a) {
+        const ok = e.type === 'entry' ? a.act === 'enter' && a.side === tr.side : a.act === EV_ACT[e.type];
+        m = ok ? 'same' : 'diff';
+      }
+      if (m === 'same') same++; else if (m === 'diff') diff++; else none++;
+      const mine = a ? `${ACT_LABEL[a.act] || a.act}${a.side ? ` ${SIDE_LABEL[a.side]}` : ''}${Number.isFinite(a.stop) ? ` · 스탑 ${fmtPrice(a.stop)}` : ''}${a.memo ? `<div class="src">${esc(a.memo)}</div>` : ''}` : '—';
+      return `<tr><td class="t">${fmtUtc(e.t, false)}</td>
+        <td><b>${EV_LABEL[e.type]}</b> ${esc(evDetail(e))}${e.corrected_by ? ' <span class="note">정정됨</span>' : ''}${e.post ? `<div class="src">${esc(postText(e.post))}</div>` : ''}</td>
+        <td>${mine}</td>
+        <td class="${m}">${{ same: '같음', diff: '다름', none: '—' }[m]}</td></tr>`;
+    }).join('');
+    const extra = Object.keys(steps).filter(i => +i >= tr.events.length).length;
+    $('cmpBody').innerHTML = `<h3>나란히 보기 — ${esc(tr.id)} ${SIDE_LABEL[tr.side] || ''}</h3>
+      <p class="sub">왼쪽은 그의 실제 사건(원문), 오른쪽은 그 사건을 열기 직전에 내가 적은 판단입니다. 「같음」은 <b>같은 행동인가</b>만 뜻합니다 — 잘잘못 판정이 아닙니다.
+      같음 ${same} · 다름 ${diff} · 안 적음 ${none}${extra ? ` · 마지막 사건 뒤에 적은 답 ${extra}개(표에 없음)` : ''}</p>
+      <div style="overflow:auto"><table class="cmp"><thead><tr><th>시각</th><th>그</th><th>나</th><th>같은 행동?</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="row end">
+        <button class="btn danger" id="cmpClear">이 매매 답 지우기</button>
+        <button class="btn" id="cmpAll">전체 보기로</button>
+        <button class="btn" id="cmpEnd">리플레이 끝내기</button>
+        <button class="btn accent" data-close>닫기</button>
+      </div>`;
+    $('cmpClear').addEventListener('click', () => {
+      if (!confirm(`${tr.id}에 적은 답을 모두 지울까요?`)) return;
+      answers.clear(tr.id); closeModal($('cmpModal')); update(); marks.refresh();
+    });
+    $('cmpAll').addEventListener('click', () => { closeModal($('cmpModal')); if (R.blind) toggleBlind(); showTrade(tr); });
+    $('cmpEnd').addEventListener('click', () => { closeModal($('cmpModal')); end(); });
+    openModal('cmpModal');
+  }
+
+  $('rbMine').addEventListener('click', openMine);
+  $('rbStep').addEventListener('click', () => { stopPlay(); step(); });
+  $('rbNext').addEventListener('click', next);
+  $('rbPlay').addEventListener('click', play);
+  $('rbSpeed').addEventListener('change', () => { if (R.timer) { stopPlay(); play(); } });
+  $('rbBlind').addEventListener('click', toggleBlind);
+  $('rbEnd').addEventListener('click', end);
+
+  return { start, end, step, next, play, stopPlay, openMine, pickAt, finish };
+})();
+
+// 매매 목록
+function renderTradeList() {
+  const ul = $('tradeList'); ul.innerHTML = '';
+  $('tradeCount').textContent = vault.trades.length;
+  if (!vault.trades.length) {
+    const li = document.createElement('li');
+    li.innerHTML = `<div class="side-empty" style="padding:6px 2px">${vault.enc && !vault.posts.length ? '🔒 글·장부가 잠겨 있습니다 — 관점 패널에서 비밀번호를 넣으세요.' : '매매 데이터가 없습니다.'}</div>`;
+    ul.appendChild(li); return;
+  }
+  for (const tr of vault.trades) {
+    const B = tradeBasics(tr);
+    const n = Object.keys(answers.steps(tr.id)).length;
+    const li = document.createElement('li');
+    const go = document.createElement('button'); go.className = 'trow';
+    go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || esc(tr.side)}</span>
+      <span class="res ${B.result == null ? 'n' : B.result >= 0 ? 'u' : 'd'}">${B.result == null ? (tr.status === 'closed' ? '—' : '종료 없음') : fmtPct(B.result)}</span>
+      <span class="d">${esc(tr.id)}</span>
+      ${tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
+      ${tr.confidence === 'low' ? '<span class="flag low">확인 필요</span>' : ''}
+      ${n ? `<span class="flag mine">✍ ${n}</span>` : ''}`;
+    go.title = '블라인드 리플레이 시작';
+    go.addEventListener('click', () => replay.start(tr));
+    const see = document.createElement('button'); see.className = 'tbtn'; see.textContent = '보기'; see.title = '원문·요약 보기';
+    see.addEventListener('click', () => { closeModal($('tradeModal')); showTrade(tr); openCard(tr); });
+    li.append(go, see);
+    ul.appendChild(li);
+  }
+}
+$('replayBtn').addEventListener('click', () => {
+  if (R.trade) { replay.finish(); return; }
+  renderTradeList(); openModal('tradeModal');
 });
 
 // ───────────────────────── 시점 북마크 (보던 시각·봉 간격·확대 정도를 저장 → 누르면 그대로 돌아감)
@@ -1102,7 +2009,7 @@ const bookmarks = (() => {
       const go = document.createElement('button'); go.className = 'bm-go';
       const nm = document.createElement('span'); nm.className = 'bm-name'; nm.textContent = b.name;
       const sub = document.createElement('span'); sub.className = 'bm-sub';
-      sub.textContent = `${fmtChartTime(msToChart(b.t))} · ${{ '5m': '5분', '15m': '15분', '1h': '1시간' }[b.iv]}`;
+      sub.textContent = `${fmtChartTime(msToChart(b.t))} · ${IV_LABEL[b.iv]}`;
       go.append(nm, sub);
       go.addEventListener('click', () => { closeModal($('gotoModal')); goTo(b); });
       const del = document.createElement('button'); del.className = 'bm-del'; del.textContent = '✕'; del.title = '삭제';
@@ -1176,72 +2083,78 @@ function parseKstInput(v) {
 }
 $('gotoBtn').addEventListener('click', () => {
   const inp = $('gotoInput');
-  inp.max = kstInputValue(Date.now());
+  inp.min = kstInputValue(klines.startMs());
+  inp.max = kstInputValue(klines.endMs());
   if (!inp.value) {
     const r = ts.getVisibleLogicalRange();
-    inp.value = kstInputValue(r && S.bars.length ? chartToMs(logicalToTime((r.from + r.to) / 2)) : Date.now());
+    inp.value = kstInputValue(r && S.bars.length ? chartToMs(logicalToTime((r.from + r.to) / 2)) : klines.endMs());
   }
   openModal('gotoModal');
 });
 function doGoto(ms) {
   if (ms == null || isNaN(ms)) { toast('날짜·시각을 입력하세요', { error: true }); return; }
-  if (ms > Date.now()) ms = Date.now();
+  ms = clampMs(ms);
+  if (blindOn() && ms > R.now * 1000) { ms = R.now * 1000; toast('블라인드 중이라 「여기까지」보다 뒤로는 못 갑니다', { ms: 2500 }); }
   closeModal($('gotoModal'));
   jumpTo(ms);
 }
 $('gotoGo').addEventListener('click', () => doGoto(parseKstInput($('gotoInput').value)));
 $('gotoInput').addEventListener('keydown', e => { if (e.key === 'Enter') doGoto(parseKstInput(e.target.value)); });
-document.querySelectorAll('#gotoModal [data-ago]').forEach(b => b.addEventListener('click', () => {
-  const ms = Date.now() - (+b.dataset.ago) * 86400000;
-  $('gotoInput').value = kstInputValue(ms);
-  doGoto(ms);
-}));
 document.querySelectorAll('#gotoModal [data-date]').forEach(b => b.addEventListener('click', () => {
   $('gotoInput').value = b.dataset.date;
   doGoto(parseKstInput(b.dataset.date));
 }));
 
+// 최신으로 = 2024-12-06 마지막 봉 (리플레이 중이면 「여기까지」)
 $('latestBtn').addEventListener('click', () => {
   S.jumpT = null;
-  if (S.atLatest) { ts.scrollToRealTime(); drawings.refresh(); }
+  if (blindOn()) { ts.scrollToRealTime(); refreshAll(); }
+  else if (S.atLatest) { ts.scrollToRealTime(); refreshAll(); }
   else loadLatest();
 });
 
-// 내보내기 / 가져오기
+// 내보내기 / 가져오기 (그림 · 북마크 · 리플레이 답을 한 JSON으로 — 형식은 README)
 function exportPayload() {
   return JSON.stringify({
-    app: 'btc-psych-chart', version: 1, symbol: SYMBOL,
+    app: '99-replay', version: 1, symbol: SYMBOL,
     exportedAt: new Date().toISOString(), drawings: drawings.all(), bookmarks: bookmarks.all(),
+    replay: { key: ANS_KEY, answers: answers.all() },
   }, null, 1);
 }
+function countsText() { return `그림 ${drawings.count()}개 · 북마크 ${bookmarks.count()}개 · 리플레이 답 ${answers.count()}매매`; }
 $('dataBtn').addEventListener('click', () => {
   $('drawCount').textContent = drawings.count();
   $('bmCount2').textContent = bookmarks.count();
+  $('ansCount').textContent = answers.count();
   openModal('dataModal');
 });
 $('exportFile').addEventListener('click', () => {
   const blob = new Blob([exportPayload()], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `btc-psych-drawings-${kstInputValue(Date.now()).replace(/[-:]/g, '').replace('T', '-')}.json`;
+  a.download = `99-replay-${kstInputValue(Date.now()).replace(/[-:]/g, '').replace('T', '-')}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 });
 $('exportCopy').addEventListener('click', async () => {
   const text = exportPayload();
-  try { await navigator.clipboard.writeText(text); toast(`그림 ${drawings.count()}개 · 북마크 ${bookmarks.count()}개를 복사했습니다`); }
+  try { await navigator.clipboard.writeText(text); toast(`${countsText()}를 복사했습니다`); }
   catch { $('importText').value = text; $('importText').select(); toast('자동 복사가 막혀 있어요 — 아래 칸의 텍스트를 직접 복사하세요', { ms: 5000 }); }
 });
 function importText(text) {
   let data;
   try { data = JSON.parse(text); } catch { toast('JSON 형식이 아닙니다', { error: true }); return; }
   const arr = Array.isArray(data) ? data : data && data.drawings;
-  if (!Array.isArray(arr)) { toast('그림 목록을 찾지 못했습니다', { error: true }); return; }
-  const { added, bad } = drawings.importMany(arr);
+  const ans = data && data.replay && data.replay.answers;
+  if (!Array.isArray(arr) && !ans) { toast('그림·리플레이 답을 찾지 못했습니다', { error: true }); return; }
+  const { added, bad } = Array.isArray(arr) ? drawings.importMany(arr) : { added: 0, bad: 0 };
   const bmAdded = bookmarks.importMany(data && data.bookmarks);
+  const ansAdded = answers.importMany(ans);
   $('drawCount').textContent = drawings.count();
   $('bmCount2').textContent = bookmarks.count();
-  toast(`그림 ${added}개${bmAdded ? ` · 북마크 ${bmAdded}개` : ''} 가져왔습니다${bad ? ` (잘못된 항목 ${bad}개 건너뜀)` : ''}`);
+  $('ansCount').textContent = answers.count();
+  marks.refresh();
+  toast(`그림 ${added}개${bmAdded ? ` · 북마크 ${bmAdded}개` : ''}${ansAdded ? ` · 리플레이 답 ${ansAdded}칸` : ''} 가져왔습니다${bad ? ` (잘못된 항목 ${bad}개 건너뜀)` : ''}`);
 }
 $('importFileBtn').addEventListener('click', () => $('importFile').click());
 $('importFile').addEventListener('change', async e => {
@@ -1267,26 +2180,37 @@ document.querySelectorAll('#ivSeg button').forEach(b => b.addEventListener('clic
 
 // 단축키 (PC)
 document.addEventListener('keydown', e => {
-  const inField = e.target.matches('input, textarea');
+  const inField = e.target.matches('input, textarea, select');
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField) {
     e.preventDefault(); undo(); return;
   }
   if (inField || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'Escape') {
     const open = document.querySelector('.backdrop.show');
-    if (open) closeModal(open); else { select(null); setTool(null); }
+    if (open) closeModal(open);
+    else { R.pick = false; select(null); setTool(null); }
     return;
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && drawings.getSel()) { $('hintDelete').click(); return; }
   if (document.querySelector('.backdrop.show')) return;
+  // 리플레이: → 1봉 · Shift+→ 다음 사건 · Space 자동재생
+  if (R.trade) {
+    if (e.key === 'ArrowRight') { e.preventDefault(); if (e.shiftKey) replay.next(); else { replay.stopPlay(); replay.step(); } return; }
+    if (e.key === ' ') { e.preventDefault(); replay.play(); return; }
+  }
   const map = { h: 'hline', v: 'vline', b: 'box', d: 'dot', r: 'ray', t: 'text', e: 'erase' };
   const k = e.key.toLowerCase();
   if (map[k]) setTool(tool === map[k] ? null : map[k]);
   else if (k === 'g') $('gotoBtn').click();
   else if (k === 'l') $('latestBtn').click();
-  else if (k === '1') switchInterval('5m');
-  else if (k === '2') switchInterval('15m');
-  else if (k === '3') switchInterval('1h');
+  else if (k === 'p') $('replayBtn').click();
+  else if (k === 'o') $('sideBtn').click();
+  else if (k === 'm') marks.toggle();
+  else if (k === 'n' && R.trade) replay.next();
+  else if (k === '1') switchInterval('1m');
+  else if (k === '2') switchInterval('5m');
+  else if (k === '3') switchInterval('15m');
+  else if (k === '4') switchInterval('1h');
 });
 
 // 와이드 버튼
@@ -1304,10 +2228,14 @@ wantWide = !!prefs.wide;
 wide.apply(wantWide);
 S.iv = IVS[prefs.iv] ? prefs.iv : '5m';
 document.querySelectorAll('#ivSeg button').forEach(b => b.classList.toggle('on', b.dataset.iv === S.iv));
+if (prefs.side === false) setSide(false);
+$('markBtn').classList.toggle('on', marks.isOn());
 updateLegend();
-loadLatest();
-connectWs();
+klines.init()
+  .then(() => loadLatest())
+  .catch(e => toast('시세 목록(data/klines/index.json)을 읽지 못했습니다 — tools/build_klines.py 로 만들어 주세요', { error: true, detail: e.message, ms: 10000 }));
+initVault();
 
 // 디버그·테스트용
-window.__psych = { S, chart, series, drawings, bookmarks, jumpTo, switchInterval, wide };
+window.__replay = { S, R, vault, chart, series, drawings, bookmarks, answers, replay, panel, jumpTo, switchInterval, wide, klines };
 })();
