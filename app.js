@@ -1524,6 +1524,61 @@ const panel = (() => {
   $('followChk').checked = follow;
   document.querySelectorAll('#kindChips button').forEach(b => b.classList.toggle('on', b.dataset.f === filter));
 
+  // 적용 중인 공지 (posts의 `notice`: main | change) — 그 시각 이전의 마지막 main + 그 뒤의 change 전부
+  const nbox = $('noticeBox');
+  let notices = [], nbKey = '', nbOpen = prefs0.noticeOpen !== false;
+  function activeNotices(T) {
+    let i0 = -1;
+    for (let i = 0; i < notices.length && notices[i].t <= T; i++) if (notices[i].notice === 'main') i0 = i;
+    if (i0 < 0) return notices.filter(p => p.t <= T); // main 이전의 change만 있는 경우
+    return notices.slice(i0).filter(p => p.t <= T);
+  }
+  function refT() {
+    if (blindOn()) { // 블라인드 — 보이는 글까지만 (shown 조건과 같다)
+      let T = -Infinity;
+      for (const p of notices) if (p.t < R.now || p.t <= R.shownT) T = p.t;
+      return T;
+    }
+    if (!S.bars.length) return -Infinity;
+    const r = ts.getVisibleLogicalRange(); if (!r) return -Infinity;
+    return logicalToTime((r.from + r.to) / 2) - KST;
+  }
+  function renderNotice() {
+    if (!notices.length) { nbox.hidden = true; nbKey = ''; return; }
+    const list = activeNotices(refT());
+    const key = list.map(p => p.id).join(',');
+    if (key === nbKey) return;
+    nbKey = key;
+    nbox.hidden = !list.length;
+    if (!list.length) { nbox.innerHTML = ''; return; }
+    const d = document.createElement('details');
+    d.className = 'notice-box-in';
+    d.open = nbOpen;
+    d.innerHTML = `<summary>📌 적용 중인 공지 ${list.length} <span class="nb-arrow">${nbOpen ? '▾' : '▸'}</span></summary>`;
+    for (const p of list) {
+      const it = document.createElement('div');
+      it.className = 'nb-item' + (p.notice === 'change' ? ' chg' : '');
+      it.dataset.id = p.id;
+      it.innerHTML = `<div class="nb-h">${fmtUtc(p.t)} · ${p.notice === 'main' ? '운용 공지' : '변경·보탬'}</div>`;
+      const tx = document.createElement('div');
+      tx.className = 'nb-tx';
+      tx.textContent = p.text; // 원문 그대로
+      it.appendChild(tx);
+      d.appendChild(it);
+    }
+    d.addEventListener('toggle', () => {
+      nbOpen = d.open;
+      d.querySelector('.nb-arrow').textContent = nbOpen ? '▾' : '▸';
+      store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), noticeOpen: nbOpen });
+    });
+    nbox.innerHTML = '';
+    nbox.appendChild(d);
+  }
+  nbox.addEventListener('click', e => {
+    const it = e.target.closest('.nb-item'); if (!it) return;
+    if (!blindOn()) select(it.dataset.id);
+  });
+
   const matchKind = p => filter === 'all' || (filter === 'view' ? p.kind === 'view' : p.kind === 'signal' || p.kind === 'risk');
   const shown = p => !blindOn() || p.t < R.now || p.t <= R.shownT;
 
@@ -1568,7 +1623,9 @@ const panel = (() => {
     $('sampleBadge').innerHTML = vault.source === 'sample' ? ' <span class="badge-sample">샘플</span>' : '';
     body.innerHTML = '';
     items = [];
-    if (!has) { $('sideCount').textContent = ''; return; }
+    notices = vault.posts.filter(p => p.notice === 'main' || p.notice === 'change');
+    nbKey = '';
+    if (!has) { $('sideCount').textContent = ''; renderNotice(); return; }
     const ql = q.trim().toLowerCase();
     const frag = document.createDocumentFragment();
     for (const p of vault.posts) {
@@ -1588,6 +1645,7 @@ const panel = (() => {
     for (const it of items) { const s = shown(it.p); it.el.hidden = !s; if (s) n++; }
     $('sideCount').textContent = items.length ? `${n}${n !== vault.posts.length ? ` / ${vault.posts.length}` : ''}` : '';
     near = null;
+    renderNotice();
     doFollow(true);
   }
 
@@ -1615,7 +1673,7 @@ const panel = (() => {
   function followSoon() {
     if (followQueued) return;
     followQueued = true;
-    requestAnimationFrame(() => { followQueued = false; doFollow(); });
+    requestAnimationFrame(() => { followQueued = false; if (!blindOn()) renderNotice(); doFollow(); });
   }
 
   function select(id, { jump = true, scroll = true } = {}) {

@@ -253,6 +253,7 @@
     html.wide #sideBtn { display:inline-flex; }
     html.wide .side { border-top:0; border-left:1px solid var(--border); height:auto; }
     html.wide .side .side-body, html.wide .side .side-tools { display:flex; }
+    html.wide .side .notice-box { display:block; }
     html.wide .drawer-grip .arrow { display:none; }
     html.wide .tools {
       flex-direction:column; justify-content:flex-start; gap:2px;
@@ -332,6 +333,16 @@
   .side-empty .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
   .side-empty b { color:var(--text); }
   .side-empty[hidden], .side-body[hidden] { display:none !important; }
+  /* 적용 중인 공지 — 그 시각 이전의 마지막 main + 그 뒤 change (공통설계 §4-1) */
+  .notice-box { border-bottom:1px solid var(--border); padding:6px 10px; max-height:38%; overflow:auto; overscroll-behavior:contain; flex-shrink:0; }
+  .notice-box[hidden] { display:none !important; }
+  .notice-box summary { cursor:pointer; font-size:12px; color:var(--k-risk); font-family:var(--mono); list-style:none; display:flex; gap:6px; align-items:center; }
+  .notice-box summary::-webkit-details-marker { display:none; }
+  .notice-box summary .nb-arrow { margin-left:auto; color:var(--text-dim); }
+  .notice-box .nb-item { margin-top:6px; padding:4px 6px 4px 8px; border-left:2px solid var(--k-risk); cursor:pointer; }
+  .notice-box .nb-item.chg { border-left-style:dashed; }
+  .notice-box .nb-h { font-family:var(--mono); font-size:11px; color:var(--text-dim); }
+  .notice-box .nb-tx { white-space:pre-wrap; word-break:break-word; font-size:12.5px; line-height:1.5; color:var(--text); }
   .side-empty code { font-family:var(--mono); font-size:11.5px; color:var(--text); }
   .badge-sample { font-family:var(--mono); font-size:10.5px; color:var(--bg); background:var(--brake); border-radius:4px; padding:1px 5px; font-weight:700; }
 
@@ -400,8 +411,9 @@
   @media (max-width: 720px) {
     .side { border-left:0; border-top:1px solid var(--border); max-height:44px; }
     .side.open { max-height:none; height:46dvh; }
-    .side .side-tools, .side .side-body, .side .side-empty { display:none; }
+    .side .side-tools, .side .side-body, .side .side-empty, .side .notice-box { display:none; }
     .side.open .side-tools, .side.open .side-body { display:flex; }
+    .side.open .notice-box { display:block; }
     .side.open .side-empty { display:block; }
     .side-head { padding:6px 10px; min-height:43px; }
     .drawer-grip { flex:1; }
@@ -512,6 +524,7 @@
       </div>
       <input type="search" class="search" id="postSearch" placeholder="본문 검색" autocomplete="off">
     </div>
+    <div class="notice-box" id="noticeBox" hidden></div>
     <div class="side-body" id="postList"></div>
     <div class="side-empty" id="sideEmpty" hidden></div>
   </aside>

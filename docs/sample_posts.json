@@ -1,5 +1,14 @@
 [
  {
+  "id": "p9001",
+  "t": 1728946200,
+  "text": "[샘플] 운용 공지 — 가상의 규칙입니다.\n시드 비중 A · 레버리지 B · 분할 C",
+  "kind": "view",
+  "trade": null,
+  "photo": false,
+  "notice": "main"
+ },
+ {
   "id": "p0001",
   "t": 1728949800,
   "text": "[샘플] 출근",
@@ -78,6 +87,15 @@
   "kind": "view",
   "trade": "S1",
   "photo": false
+ },
+ {
+  "id": "p9002",
+  "t": 1728960000,
+  "text": "[샘플] 공지 변경 — 가상의 보탬 글입니다.",
+  "kind": "view",
+  "trade": null,
+  "photo": false,
+  "notice": "change"
  },
  {
   "id": "p0011",
