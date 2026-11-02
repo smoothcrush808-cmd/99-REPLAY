@@ -775,19 +775,38 @@ const marks = (() => {
     ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.2; if (dash) ctx.setLineDash(dash);
     ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, h); ctx.stroke(); ctx.restore();
   }
-  // 글씨 상자: 이번 그리기에서 먼저 놓인 상자와 겹치면 아래·위로 한 줄씩 비켜 놓는다
+  // 글씨 상자: 이번 그리기에서 먼저 놓인 상자·기호와 겹치면 아래·위로 한 줄씩 비켜 놓는다.
+  // 마커 글씨(anchor 있음)는 오른쪽 자리가 다 차면 왼쪽에서도 찾고, 비켜 놓으면 기호까지 가는 가는 선을 긋는다.
+  // 그래도 자리가 없으면 그리지 않는다(카드에는 그대로 나온다)
   let placed = [];
+  let labels = []; // 기호를 다 그린 뒤 놓을 글씨
   const SHIFTS = [0, 16, -16, 32, -32, 48, -48];
-  function tag(ctx, x, y, text, bg, fg) {
+  const reserve = (x, y, r) => placed.push({ x: Math.round(x - r), y: Math.round(y - r), w: Math.round(r * 2), h: Math.round(r * 2) });
+  function tag(ctx, x, y, text, bg, fg, anchor = null) {
     ctx.font = FONT; const w = ctx.measureText(text).width + 8;
-    x = Math.round(x);
-    const free = yy => !placed.some(r => x < r.x + r.w + 2 && r.x < x + w + 2 && yy < r.y + 16 && r.y < yy + 16);
-    const off = SHIFTS.find(d => free(y + d));
-    y = Math.round(y + (off ?? 0));
-    placed.push({ x, y, w });
-    ctx.fillStyle = bg; ctx.fillRect(x, y, w, 15);
-    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, x + 4, y + 8);
+    const busy = (xx, yy) => placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? 15) + 1 && r.y < yy + 16);
+    const xs = anchor ? [Math.round(x), Math.round(anchor.x - 8 - w)] : [Math.round(x)];
+    let px = null, py = null;
+    for (const xx of xs) {
+      const off = SHIFTS.find(d => !busy(xx, y + d));
+      if (off != null) { px = xx; py = Math.round(y + off); break; }
+    }
+    if (px == null) {
+      if (anchor) return 0;             // 마커 글씨: 자리가 없으면 생략
+      px = xs[0]; py = Math.round(y);   // 스탑·리플레이 글씨는 그대로 그린다
+    }
+    placed.push({ x: px, y: py, w });
+    if (anchor && (py !== Math.round(y) || px !== xs[0])) {
+      ctx.save(); ctx.strokeStyle = fg; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(anchor.x, anchor.y); ctx.lineTo(px < anchor.x ? px + w : px, py + 8); ctx.stroke(); ctx.restore();
+    }
+    ctx.fillStyle = bg; ctx.fillRect(px, py, w, 15);
+    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, px + 4, py + 8);
     return w;
+  }
+  function flushLabels(ctx) {
+    for (const L of labels) tag(ctx, L.x, L.y, L.text, L.bg, L.fg, L.anchor);
+    labels = [];
   }
 
   function drawTrade(ctx, tr, w) {
@@ -807,7 +826,7 @@ const marks = (() => {
         ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, prevY); ctx.lineTo(Math.round(x0) + 0.5, y); ctx.stroke();
       }
       ctx.restore();
-      if (x1 - x0 > 70 && x1 > 0 && x0 < w) tag(ctx, Math.max(x0, 0) + 2, y - 17, (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), 'rgba(10,14,20,0.75)', col);
+      if (x1 - x0 > 70 && x1 > 0 && x0 < w) labels.push({ x: Math.max(x0, 0) + 2, y: y - 17, text: (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), bg: 'rgba(10,14,20,0.75)', fg: col });
       prevY = y;
     }
     if (!on) return;
@@ -830,7 +849,7 @@ const marks = (() => {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
         ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
-        if (Number.isFinite(e.cum)) tag(ctx, x + 8, y - 7, `→누적 ${e.cum}%`, 'rgba(10,14,20,0.75)', sideC);
+        if (Number.isFinite(e.cum)) labels.push({ x: x + 9, y: y - 7, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
       } else if (e.type === 'reduce' || e.type === 'tp') {
         if (e.corrected_by) ctx.globalAlpha = 0.45;
         ctx.fillStyle = C.reduce; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
@@ -839,7 +858,7 @@ const marks = (() => {
           : `${e.pct != null ? `${e.pct}%` : Number.isFinite(e.cum) ? `→누적 ${e.cum}%` : '?'}${e.corrected_by ? ' 정정됨' : ''}`;
         // 정정된 사건: 점은 흐리게, 글씨는 진한 바탕 위 흐린 글자로 (캔들 위에서도 읽히게)
         ctx.globalAlpha = 1;
-        tag(ctx, x + 7, y - 7, lab, e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.75)', e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce);
+        labels.push({ x: x + 8, y: y - 7, text: lab, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
@@ -850,6 +869,7 @@ const marks = (() => {
         ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.restore();
+      reserve(x, y, 7); // 기호 자리 — 글씨가 덮지 않게
       hits.push({ x, y, tr, e });
     }
   }
@@ -878,7 +898,7 @@ const marks = (() => {
 
   function draw(ctx, w, h) {
     hits = [];
-    placed = [];
+    placed = []; labels = [];
     lastH = h;
     // 고른 글의 시각
     if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
@@ -893,6 +913,9 @@ const marks = (() => {
       });
       if (on) for (const tr of vis) drawBand(ctx, tr, w, h); // 구간 색칠은 맨 아래
       for (const tr of vis) drawTrade(ctx, tr, w);
+      // 마커 글씨를 먼저(기호 바로 옆 자리 우선), 스탑 글씨는 그다음
+      labels.sort((a, b) => (a.anchor ? 0 : 1) - (b.anchor ? 0 : 1));
+      flushLabels(ctx);
     }
     drawMine(ctx, w);
     if (on) drawDots(ctx, w, h); else postHits = [];
