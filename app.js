@@ -710,11 +710,10 @@ function stopSegs(tr) {
   const last = tr.events[tr.events.length - 1].t;
   let end = closed ? exit.t : (tr.status === 'closed' && exit ? exit.t : (nextTradeOpen(tr) ?? last + 4 * 3600));
   if (blindOn()) end = Math.min(end, R.now);
-  let r0 = false;
+  // 칸마다 따로 판정 — 리스크 0% 뒤에 스탑을 다시 불리한 쪽으로 넓히면 그 칸은 주황으로 돌아간다(흔들림이 보이게)
   return stops.map((e, i) => {
-    if (isRisk0(tr, e, basisAt(tr, e.t, B))) r0 = true;
     const t1 = i + 1 < stops.length ? stops[i + 1].t : end;
-    return { t0: e.t, t1: Math.max(e.t, t1), stop: e.stop, risk0: r0, tail: i + 1 === stops.length && !closed };
+    return { t0: e.t, t1: Math.max(e.t, t1), stop: e.stop, risk0: isRisk0(tr, e, basisAt(tr, e.t, B)), tail: i + 1 === stops.length && !closed };
   });
 }
 
