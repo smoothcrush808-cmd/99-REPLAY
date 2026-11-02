@@ -173,8 +173,17 @@
     "price": 67147.5
    }
   ],
-  "flags": [],
-  "confidence": "high"
+  "flags": [
+   "사건 빠짐"
+  ],
+  "confidence": "high",
+  "reviews": [
+   {
+    "t": 1729050600,
+    "post": "p9003",
+    "note": "복기 글"
+   }
+  ]
  },
  {
   "id": "S5",

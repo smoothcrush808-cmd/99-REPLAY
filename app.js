@@ -1799,7 +1799,15 @@ function postText(id) {
 // 결과 줄: 누적(cum)이 다 있으면 비중 반영 값이 대표, 첫 진입가 → 종료가는 참고로
 const resCls = v => (v == null ? 'n' : v >= 0 ? 'u' : 'd');
 const subNote = t => `<span style="color:var(--text-sub);font-size:11px">${t}</span>`;
+// 「사건 빠짐」: 복기 글(reviews)에 나온 추가·정리가 장부 사건에 없다 → 결과 %가 그만큼 불완전 (공통설계 §4-2, 11-02)
+const missingEv = tr => tr.flags.includes('사건 빠짐');
 function resultRows(tr, B) {
+  const rows = resultRowsBase(tr, B);
+  return missingEv(tr)
+    ? `<dt class="note">⚠ 사건 빠짐</dt><dd class="note">복기 글에 나온 추가·정리가 장부에 없음 — 아래 결과 %는 그 사건 없이 계산한 값</dd>${rows}`
+    : rows;
+}
+function resultRowsBase(tr, B) {
   if (!onChart(tr)) return `<dt>종목</dt><dd>${esc(tr.asset)} ${subNote('BTC 차트에 그리지 않음 · 가격 없음')}</dd>`;
   const simple = `<dd><span class="res ${resCls(B.result)}">${fmtPct(B.result)}</span> ${subNote('첫 진입가 → 종료가')}</dd>`;
   const P = B.pos;
@@ -1838,11 +1846,12 @@ async function openCard(tr, hitEv = null) {
       ${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}
       ${e.post ? `<div class="tx">${esc(postText(e.post))}</div>` : ''}</li>`).join('');
   // 계획·레버리지 변경 메시지 (사건 아님 — 시각순)
-  const side = [...(tr.plans || []).map(x => ({ ...x, k: '계획' })), ...(Array.isArray(tr.size) ? tr.size : []).map(x => ({ ...x, k: '레버·규모' }))]
+  const arr = v => (Array.isArray(v) ? v : []);
+  const side = [...arr(tr.plans).map(x => ({ ...x, k: '계획' })), ...arr(tr.size).map(x => ({ ...x, k: '레버·규모' })), ...arr(tr.reviews).map(x => ({ ...x, k: '복기' }))]
     .filter(x => Number.isFinite(x.t) && (!blindOn() || x.t < R.now || x.t <= R.shownT)).sort((a, b) => a.t - b.t);
   const plans = side.map(pl => `<li><div class="eh"><span>${fmtUtc(pl.t)}</span><b>${pl.k}</b><span>(사건 아님)</span>${pl.note ? `<span class="note">${esc(pl.note)}</span>` : ''}</div>${pl.post ? `<div class="tx">${esc(postText(pl.post))}</div>` : ''}</li>`).join('');
   $('cardBody').innerHTML = `${head}${kv}<div class="label">사건 ${evs.length}${live ? ` / ${tr.events.length}` : ''}</div><ul class="evs">${list}</ul>
-    ${plans ? `<div class="label">계획 · 레버리지 메시지</div><ul class="evs">${plans}</ul>` : ''}
+    ${plans ? `<div class="label">계획 · 레버리지 · 복기 메시지</div><ul class="evs">${plans}</ul>` : ''}
     <div class="row end">
       ${R.trade || !onChart(tr) ? '' : '<button class="btn" id="cardGo">차트에서 보기</button><button class="btn accent" id="cardReplay">이 매매 리플레이</button>'}
       <button class="btn" data-close>닫기</button>
@@ -2153,7 +2162,7 @@ function renderTradeList() {
     const li = document.createElement('li');
     const go = document.createElement('button'); go.className = 'trow';
     go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || esc(tr.side)}</span>
-      <span class="res ${resCls(mainResult(B))}" title="${B.wresult != null ? '비중 반영(누적 %)' : '첫 진입가 → 종료가'}">${mainResult(B) == null ? (tr.status === 'closed' ? '—' : '종료 없음') : fmtPct(mainResult(B)) + (B.wresult != null ? '<sup>w</sup>' : '')}</span>
+      <span class="res ${resCls(mainResult(B))}" title="${B.wresult != null ? '비중 반영(누적 %)' : '첫 진입가 → 종료가'}${missingEv(tr) ? ' · 사건 빠짐: 복기에 나온 추가·정리가 장부에 없음' : ''}">${mainResult(B) == null ? (tr.status === 'closed' ? '—' : '종료 없음') : fmtPct(mainResult(B)) + (B.wresult != null ? '<sup>w</sup>' : '')}${missingEv(tr) ? ' ⚠' : ''}</span>
       ${onChart(tr) ? '' : `<span class="flag">${esc(tr.asset)}</span>`}
       <span class="d">${esc(tr.id)}</span>
       ${tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
