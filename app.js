@@ -687,6 +687,9 @@ function isRisk0(tr, e, basis) {
 }
 // BTC가 아닌 매매(PEPE 등, price 없음)는 BTC 차트에 그리지 않는다
 const onChart = tr => !tr.asset || /^BTC/i.test(tr.asset);
+// 스탑이 진입가(또는 캔들)에서 이만큼 넘게 떨어지면 장부 이상값 후보로 본다 — 판정이 아니라 확인 표시
+const STOP_FAR = 0.15;
+const farStops = (tr, ep) => (ep == null ? [] : tr.events.filter(e => e.type === 'stop' && Number.isFinite(e.stop) && Math.abs(e.stop - ep) / ep > STOP_FAR));
 // 보이는 사건인가 (블라인드 중인 매매는 연 사건까지만, 다른 매매는 now 전 사건만)
 function evShown(tr, e) {
   if (!blindOn()) return true;
@@ -862,14 +865,24 @@ const marks = (() => {
     updateAllViews: () => {},
     paneViews: () => views,
     // 보이는 구간의 스탑 계단이 화면 밖으로 나가지 않게 가격축 범위에 넣는다
+    // 단, 캔들 범위에서 15% 넘게 떨어진 스탑(장부 이상값일 가능성)은 넣지 않는다 — 캔들이 화면 밖으로 밀려나지 않게
     autoscaleInfo: (from, to) => {
-      if (!vault.trades.length || !S.bars.length) return null;
+      if (!vault.trades.length || !S.bars.length || !shownLen) return null;
       const lo = logicalToTime(Math.floor(from)) - KST, hi = logicalToTime(Math.ceil(to)) - KST;
+      let cmin = Infinity, cmax = -Infinity;
+      for (let i = Math.max(0, Math.floor(from)), e = Math.min(shownLen - 1, Math.ceil(to)); i <= e; i++) {
+        const b = S.bars[i]; if (b.low < cmin) cmin = b.low; if (b.high > cmax) cmax = b.high;
+      }
+      if (!Number.isFinite(cmin)) return null;
+      const okLo = cmin * (1 - STOP_FAR), okHi = cmax * (1 + STOP_FAR);
       let mn = Infinity, mx = -Infinity;
       for (const tr of vault.trades) {
         if (!onChart(tr) || tr.events[0].t > hi) continue;
         if (blindOn() && tr !== R.trade && tr.events[0].t >= R.now) continue;
-        for (const s of stopSegs(tr)) if (s.t1 >= lo && s.t0 <= hi) { mn = Math.min(mn, s.stop); mx = Math.max(mx, s.stop); }
+        for (const s of stopSegs(tr)) {
+          if (s.t1 < lo || s.t0 > hi || s.stop < okLo || s.stop > okHi) continue;
+          mn = Math.min(mn, s.stop); mx = Math.max(mx, s.stop);
+        }
       }
       return Number.isFinite(mn) ? { priceRange: { minValue: mn, maxValue: mx } } : null;
     },
@@ -1835,6 +1848,7 @@ async function openCard(tr, hitEv = null) {
     ${tr.status && tr.status !== 'closed' ? `<span class="flag">${esc(tr.status)}</span>` : ''}</div>`;
   const kv = live ? '<p class="sub" style="margin-top:10px">리플레이 중 — 요약은 끝나면 보입니다.</p>' : `<dl class="kv">
     <dt>진입가</dt><dd>${B.ep != null ? fmtPrice(B.ep) : '—'}</dd>
+    ${farStops(tr, B.ep).map(e => `<dt class="note">⚠ 스탑 확인</dt><dd class="note">${fmtUtc(e.t, false)} 스탑 ${fmtPrice(e.stop)} — 진입가에서 ${((e.stop - B.ep) / B.ep * 100).toFixed(1)}% (장부 확인 필요할 수 있음)</dd>`).join('')}
     <dt>첫 스탑 거리</dt><dd>${B.stopDist != null ? `${fmtPrice(B.stopDist)} (${(B.stopDist / B.ep * 100).toFixed(2)}%)` : '—'}</dd>
     <dt>보유 시간</dt><dd>${B.hold != null ? fmtDur(B.hold) : '종료 기록 없음'}</dd>
     <dt>MFE / MAE</dt><dd id="cardExc">${B.exit ? '계산 중…' : '—'}</dd>
