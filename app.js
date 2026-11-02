@@ -687,6 +687,9 @@ function isRisk0(tr, e, basis) {
 }
 // BTC가 아닌 매매(PEPE 등, price 없음)는 BTC 차트에 그리지 않는다
 const onChart = tr => !tr.asset || /^BTC/i.test(tr.asset);
+// 스탑이 진입가(또는 캔들)에서 이만큼 넘게 떨어지면 장부 이상값 후보로 본다 — 판정이 아니라 확인 표시
+const STOP_FAR = 0.15;
+const farStops = (tr, ep) => (ep == null ? [] : tr.events.filter(e => e.type === 'stop' && Number.isFinite(e.stop) && Math.abs(e.stop - ep) / ep > STOP_FAR));
 // 보이는 사건인가 (블라인드 중인 매매는 연 사건까지만, 다른 매매는 now 전 사건만)
 function evShown(tr, e) {
   if (!blindOn()) return true;
@@ -720,6 +723,51 @@ const marks = (() => {
   let on = store.get(PREF_KEY, {}).marks !== false;
   let hits = [];
   let hl = null; // 강조할 사건 {tr, e}
+  let postHits = [], lastH = 0;
+  const KCOL = { signal: '#f7931a', risk: '#ffcc33', view: '#33d4ff', routine: '#5a7088', chat: '#7a93ad', notice: '#ff8ad8' };
+
+  // 매매 구간 색칠: 진입~종료를 옅게 (숏 붉게 · 롱 푸르게) + 위쪽 띠 — 축소해도 「여기서 매매했다」가 보이게
+  function drawBand(ctx, tr, w, h) {
+    const entry = tr.events.find(e => e.type === 'entry') || tr.events[0];
+    if (!evShown(tr, entry)) return;
+    const { exit } = tradeBasics(tr);
+    const end = exit && evShown(tr, exit) ? exit.t : blindOn() && tr === R.trade ? R.now : tr.events[tr.events.length - 1].t;
+    const x0 = barX(entry.t), x1 = barX(end);
+    if (x0 == null || x1 == null || x1 < 0 || x0 > w) return;
+    const long = tr.side !== 'short';
+    const l = Math.max(-1, x0), r = Math.min(w + 1, Math.max(x1, x0 + 3));
+    ctx.save();
+    ctx.fillStyle = long ? 'rgba(38,224,165,0.07)' : 'rgba(255,85,114,0.07)';
+    ctx.fillRect(l, 0, r - l, h);
+    ctx.fillStyle = long ? 'rgba(38,224,165,0.55)' : 'rgba(255,85,114,0.55)';
+    ctx.fillRect(l, 0, r - l, 3);
+    ctx.restore();
+  }
+
+  // 글 표시 점: 시간축 바로 위에 관점방 글 시각마다 (패널의 필터·검색·블라인드와 같은 글만, 색은 종류별)
+  function drawDots(ctx, w, h) {
+    postHits = [];
+    const list = panel.dots();
+    if (!list.length) return;
+    const r = ts.getVisibleLogicalRange(); if (!r) return;
+    const lo = logicalToTime(Math.floor(r.from)) - KST - 3600, hi = logicalToTime(Math.ceil(r.to)) - KST + 3600;
+    let i = 0, j = list.length;
+    while (i < j) { const m = (i + j) >> 1; if (list[m].t < lo) i = m + 1; else j = m; }
+    const y = h - 6, selT = panel.selT();
+    ctx.save();
+    for (; i < list.length && list[i].t <= hi; i++) {
+      const p = list[i], x = barX(p.t);
+      if (x == null || x < -3 || x > w + 3) continue;
+      ctx.fillStyle = KCOL[p.kind] || KCOL.chat;
+      ctx.beginPath(); ctx.arc(x, y, 2.6, 0, Math.PI * 2); ctx.fill();
+      if (selT === p.t && panel.selId() === p.id) {
+        ctx.strokeStyle = C.btc; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.stroke();
+      }
+      postHits.push({ x, p });
+    }
+    ctx.restore();
+  }
   let requestUpdate = () => {};
   const FONT = "600 10.5px 'IBM Plex Mono', Menlo, monospace";
 
@@ -831,26 +879,29 @@ const marks = (() => {
   function draw(ctx, w, h) {
     hits = [];
     placed = [];
+    lastH = h;
     // 고른 글의 시각
     if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
     const r = ts.getVisibleLogicalRange();
     if (vault.trades.length && r && S.bars.length) {
       const lo = logicalToTime(Math.floor(r.from)) - KST - 86400, hi = logicalToTime(Math.ceil(r.to)) - KST + 86400;
-      for (const tr of vault.trades) {
-        if (!onChart(tr)) continue;
+      const vis = vault.trades.filter(tr => {
+        if (!onChart(tr)) return false;
         const a = tr.events[0].t, b = Math.max(tr.events[tr.events.length - 1].t, nextTradeOpen(tr) ?? 0);
-        if (b < lo || a > hi) continue;
-        if (blindOn() && a >= R.now && tr !== R.trade) continue;
-        drawTrade(ctx, tr, w);
-      }
+        if (b < lo || a > hi) return false;
+        return !(blindOn() && a >= R.now && tr !== R.trade);
+      });
+      if (on) for (const tr of vis) drawBand(ctx, tr, w, h); // 구간 색칠은 맨 아래
+      for (const tr of vis) drawTrade(ctx, tr, w);
     }
     drawMine(ctx, w);
+    if (on) drawDots(ctx, w, h); else postHits = [];
     // 리플레이 「여기까지」
     if (R.trade) {
       const x = timeToX(R.now + KST - (R.now + KST) % sec());
       if (x != null && x >= -2 && x <= w + 2) {
         vline(ctx, x, h, R.blind ? C.now : 'rgba(247,147,26,0.45)', R.blind ? null : [6, 4]);
-        tag(ctx, Math.min(x + 3, w - 80), h - 19, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
+        tag(ctx, Math.min(x + 3, w - 80), h - 34, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
       }
     }
   }
@@ -862,14 +913,24 @@ const marks = (() => {
     updateAllViews: () => {},
     paneViews: () => views,
     // 보이는 구간의 스탑 계단이 화면 밖으로 나가지 않게 가격축 범위에 넣는다
+    // 단, 캔들 범위에서 15% 넘게 떨어진 스탑(장부 이상값일 가능성)은 넣지 않는다 — 캔들이 화면 밖으로 밀려나지 않게
     autoscaleInfo: (from, to) => {
-      if (!vault.trades.length || !S.bars.length) return null;
+      if (!vault.trades.length || !S.bars.length || !shownLen) return null;
       const lo = logicalToTime(Math.floor(from)) - KST, hi = logicalToTime(Math.ceil(to)) - KST;
+      let cmin = Infinity, cmax = -Infinity;
+      for (let i = Math.max(0, Math.floor(from)), e = Math.min(shownLen - 1, Math.ceil(to)); i <= e; i++) {
+        const b = S.bars[i]; if (b.low < cmin) cmin = b.low; if (b.high > cmax) cmax = b.high;
+      }
+      if (!Number.isFinite(cmin)) return null;
+      const okLo = cmin * (1 - STOP_FAR), okHi = cmax * (1 + STOP_FAR);
       let mn = Infinity, mx = -Infinity;
       for (const tr of vault.trades) {
         if (!onChart(tr) || tr.events[0].t > hi) continue;
         if (blindOn() && tr !== R.trade && tr.events[0].t >= R.now) continue;
-        for (const s of stopSegs(tr)) if (s.t1 >= lo && s.t0 <= hi) { mn = Math.min(mn, s.stop); mx = Math.max(mx, s.stop); }
+        for (const s of stopSegs(tr)) {
+          if (s.t1 < lo || s.t0 > hi || s.stop < okLo || s.stop > okHi) continue;
+          mn = Math.min(mn, s.stop); mx = Math.max(mx, s.stop);
+        }
       }
       return Number.isFinite(mn) ? { priceRange: { minValue: mn, maxValue: mx } } : null;
     },
@@ -883,6 +944,13 @@ const marks = (() => {
       store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), marks: on });
       $('markBtn').classList.toggle('on', on);
       requestUpdate();
+    },
+    // 글 점 탭: 맨 아래 줄 근처에서 가장 가까운 점
+    hitPost(px, py) {
+      if (py < lastH - 18) return null;
+      let best = null, bd = 9;
+      for (const hh of postHits) { const d = Math.abs(px - hh.x); if (d < bd) { bd = d; best = hh.p; } }
+      return best;
     },
     hitTest(px, py, tol = 14) {
       let best = null, bd = tol;
@@ -1390,7 +1458,10 @@ function onTap(x, y) {
     const sid = drawings.getSel();
     if (sid && drawings.hitTest(x, y, 22, sid)) return;
     const hit = drawings.hitTest(x, y, 18);
-    if (!hit && !sid) { const m = marks.hitTest(x, y); if (m) { openCard(m.tr, m.e); return; } }
+    if (!hit && !sid) {
+      const pp = marks.hitPost(x, y); if (pp) { panel.select(pp.id); return; }
+      const m = marks.hitTest(x, y); if (m) { openCard(m.tr, m.e); return; }
+    }
     select(hit ? hit.id : null);
     return;
   }
@@ -1650,7 +1721,7 @@ const panel = (() => {
     items = [];
     notices = vault.posts.filter(p => p.notice === 'main' || p.notice === 'change');
     nbKey = '';
-    if (!has) { $('sideCount').textContent = ''; renderNotice(); return; }
+    if (!has) { $('sideCount').textContent = ''; dotList = []; renderNotice(); return; }
     const ql = q.trim().toLowerCase();
     const frag = document.createDocumentFragment();
     for (const p of vault.posts) {
@@ -1665,9 +1736,12 @@ const panel = (() => {
     applyBlind();
   }
 
+  let dotList = []; // 차트 아래 글 점 — 지금 목록에 보이는 글(필터·검색·블라인드 반영), 시간순
   function applyBlind() {
     let n = 0;
     for (const it of items) { const s = shown(it.p); it.el.hidden = !s; if (s) n++; }
+    dotList = items.filter(it => !it.el.hidden).map(it => it.p);
+    marks.refresh();
     $('sideCount').textContent = items.length ? `${n}${n !== vault.posts.length ? ` / ${vault.posts.length}` : ''}` : '';
     near = null;
     renderNotice();
@@ -1742,6 +1816,8 @@ const panel = (() => {
     follow: followSoon,
     refollow() { near?.el.classList.remove('near'); near = null; doFollow(true); }, // 숨어 있던 서랍을 열 때
     selT: () => (sel && vault.post.get(sel) ? vault.post.get(sel).t : null),
+    selId: () => sel,
+    dots: () => dotList,
   };
 })();
 
@@ -1835,6 +1911,7 @@ async function openCard(tr, hitEv = null) {
     ${tr.status && tr.status !== 'closed' ? `<span class="flag">${esc(tr.status)}</span>` : ''}</div>`;
   const kv = live ? '<p class="sub" style="margin-top:10px">리플레이 중 — 요약은 끝나면 보입니다.</p>' : `<dl class="kv">
     <dt>진입가</dt><dd>${B.ep != null ? fmtPrice(B.ep) : '—'}</dd>
+    ${farStops(tr, B.ep).map(e => `<dt class="note">⚠ 스탑 확인</dt><dd class="note">${fmtUtc(e.t, false)} 스탑 ${fmtPrice(e.stop)} — 진입가에서 ${((e.stop - B.ep) / B.ep * 100).toFixed(1)}% (장부 확인 필요할 수 있음)</dd>`).join('')}
     <dt>첫 스탑 거리</dt><dd>${B.stopDist != null ? `${fmtPrice(B.stopDist)} (${(B.stopDist / B.ep * 100).toFixed(2)}%)` : '—'}</dd>
     <dt>보유 시간</dt><dd>${B.hold != null ? fmtDur(B.hold) : '종료 기록 없음'}</dd>
     <dt>MFE / MAE</dt><dd id="cardExc">${B.exit ? '계산 중…' : '—'}</dd>
