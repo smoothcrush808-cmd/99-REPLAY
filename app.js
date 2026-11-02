@@ -727,10 +727,18 @@ const marks = (() => {
     ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.2; if (dash) ctx.setLineDash(dash);
     ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, h); ctx.stroke(); ctx.restore();
   }
+  // 글씨 상자: 이번 그리기에서 먼저 놓인 상자와 겹치면 아래·위로 한 줄씩 비켜 놓는다
+  let placed = [];
+  const SHIFTS = [0, 16, -16, 32, -32, 48, -48];
   function tag(ctx, x, y, text, bg, fg) {
     ctx.font = FONT; const w = ctx.measureText(text).width + 8;
-    ctx.fillStyle = bg; ctx.fillRect(Math.round(x), Math.round(y), w, 15);
-    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, Math.round(x) + 4, Math.round(y) + 8);
+    x = Math.round(x);
+    const free = yy => !placed.some(r => x < r.x + r.w + 2 && r.x < x + w + 2 && yy < r.y + 16 && r.y < yy + 16);
+    const off = SHIFTS.find(d => free(y + d));
+    y = Math.round(y + (off ?? 0));
+    placed.push({ x, y, w });
+    ctx.fillStyle = bg; ctx.fillRect(x, y, w, 15);
+    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, x + 4, y + 8);
     return w;
   }
 
@@ -781,7 +789,9 @@ const marks = (() => {
         ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         const lab = e.type === 'tp' ? 'TP'
           : `${e.pct != null ? `${e.pct}%` : Number.isFinite(e.cum) ? `→누적 ${e.cum}%` : '?'}${e.corrected_by ? ' 정정됨' : ''}`;
-        tag(ctx, x + 7, y - 7, lab, 'rgba(10,14,20,0.75)', C.reduce);
+        // 정정된 사건: 점은 흐리게, 글씨는 진한 바탕 위 흐린 글자로 (캔들 위에서도 읽히게)
+        ctx.globalAlpha = 1;
+        tag(ctx, x + 7, y - 7, lab, e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.75)', e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce);
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
@@ -820,6 +830,7 @@ const marks = (() => {
 
   function draw(ctx, w, h) {
     hits = [];
+    placed = [];
     // 고른 글의 시각
     if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
     const r = ts.getVisibleLogicalRange();
