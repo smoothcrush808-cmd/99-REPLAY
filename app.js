@@ -639,6 +639,9 @@ function positionPath(tr) {
   if (!evs.some(e => Number.isFinite(e.cum))) return null;
   const dir = tr.side === 'short' ? -1 : 1;
   let qty = 0, avg = null, pnl = 0, closed = 0, maxQty = 0;
+  // 시드 기준(보조): 늘리는 사건마다 그 글의 배율(lev)로 코인 수를 쌓고, 줄일 땐 비례로 덜어 손익을 시드 %p로 센다.
+  // 진입·추가 중 하나라도 lev가 없으면 계산하지 않는다(앞 배율을 이어 쓰지 않음)
+  let coins = 0, cost = 0, seed = 0, levWhy = null;
   const path = [];
   for (const e of evs) {
     if (!['entry', 'add', 'reduce', 'exit'].includes(e.type)) continue;
@@ -647,16 +650,27 @@ function positionPath(tr) {
     if (!Number.isFinite(to)) return { ok: false, why: `${at}에 누적 % 없음` };
     if (!Number.isFinite(e.price)) return { ok: false, why: `${at}에 가격 없음` };
     const d = to - qty;
-    if (d > 0) avg = qty > 0 ? (avg * qty + e.price * d) / to : e.price;
-    else if (d < 0) {
+    if (d > 0) {
+      avg = qty > 0 ? (avg * qty + e.price * d) / to : e.price;
+      if (!Number.isFinite(e.lev)) levWhy = levWhy || `${at}에 배율 없음`;
+      else { coins += d * e.lev / e.price; cost += d * e.lev; }
+    } else if (d < 0) {
       if (avg == null) return { ok: false, why: `${at}: 진입 전 정리` };
       pnl += -d * dir * (e.price - avg) / avg * 100;
       closed += -d;
+      if (!levWhy && coins > 0) {
+        const f = -d / qty, c = coins * f, k = cost * f;
+        seed += dir * (c * e.price - k); // = 닫은 코인 × (청산가 − 그 코인 평단), 단위: 시드 %p
+        coins -= c; cost -= k;
+      }
     }
     qty = to; maxQty = Math.max(maxQty, qty);
     path.push({ t: e.t, qty, avg });
   }
-  return { ok: true, result: closed ? pnl / closed : null, closed, open: qty, maxQty, path, avg };
+  return {
+    ok: true, result: closed ? pnl / closed : null, closed, open: qty, maxQty, path, avg,
+    seed: levWhy ? null : (closed ? seed : null), seedWhy: levWhy,
+  };
 }
 // t 시각의 평단 기준: 그가 적은 평단(avg) → 누적으로 계산한 평단 → 첫 진입가
 function basisAt(tr, t, B) {
@@ -1783,6 +1797,9 @@ function resultRows(tr, B) {
   const left = P.open > 0 ? ` · 남은 누적 ${P.open}% 종료 기록 없음` : '';
   return `<dt>결과 (비중 반영)</dt><dd><span class="res ${resCls(P.result)}">${fmtPct(P.result)}</span> ${subNote(`청산분 누적 크기로 가중 · 레버 미반영`)}</dd>
     <dt>누적</dt><dd>최대 ${P.maxQty}% · 평단 ${P.avg != null ? fmtPrice(P.avg) : '—'}${left}</dd>
+    <dt>시드 기준</dt><dd>${P.seed != null
+      ? `<span class="res ${resCls(P.seed)}">${P.seed > 0 ? '+' : ''}${P.seed.toFixed(2)}%p</span> ${subNote('누적 × 배율 × 가격 변화 · 수수료·펀딩 제외, 계좌 수익률 아님')}`
+      : `— ${subNote(esc(P.seedWhy || '청산 없음'))}`}</dd>
     <dt>참고</dt>${simple}`;
 }
 
