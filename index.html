@@ -470,6 +470,20 @@
   .cmp .scn b { color:var(--text); font-weight:600; }
   .cmp .tdiff { font-family:var(--mono); font-size:11.5px; color:var(--accel); margin-top:3px; }
   #mineSizeRow[hidden], #mineScenRow[hidden], #mineMemoRow[hidden] { display:none; }
+
+  /* 팝업: 화면보다 길면 안에서 스크롤, 아래 버튼 줄(닫기·저장)은 늘 보이게 붙여 둔다 */
+  .panel { overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  .panel > .row.end:last-child, .panel > div > .row.end:last-child {
+    position:sticky; bottom:-18px; margin:10px -18px -18px; padding:10px 18px 14px;
+    background:var(--bg2); border-top:1px solid var(--border); z-index:1;
+  }
+  /* 와이드(화면 90° 회전): 쓸 수 있는 높이는 폰의 폭(--vw) — 100dvh(폰 세로 길이)로 잡으면 팝업이 잘려 스크롤도 안 된다 */
+  html.wide .backdrop { padding:8px; }
+  html.wide .panel { max-height:calc(var(--vw) - 16px); padding:14px 16px; }
+  html.wide .panel > .row.end:last-child { bottom:-14px; margin:8px -16px -14px; padding:8px 16px 10px; }
+  html.phone-h .backdrop { padding:8px; }
+  html.phone-h .panel { padding:14px 16px; }
+  html.phone-h .panel > .row.end:last-child { bottom:-14px; margin:8px -16px -14px; padding:8px 16px 10px; }
 </style>
 </head>
 <body>
@@ -729,6 +743,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
