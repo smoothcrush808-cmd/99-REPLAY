@@ -909,6 +909,28 @@ const marks = (() => {
       flush(a.now); cur = a;
     }
     flush(null);
+    // 내 판단 자리: 진입은 보라 ▲/▼ 테두리(「여기서 들어간다」면 그 시각, 아니면 그의 진입 시각), 나머지 행동은 작은 ◆
+    // 가격은 그 시각 직전에 닫힌 봉의 종가 = 적을 때 보던 마지막 값
+    const priceAt = t => { const i = indexAtOrBefore(t + KST - 1); return i >= 0 && i < shownLen ? S.bars[i].close : null; };
+    const L = Object.fromEntries(SIZE3);
+    Object.keys(steps).map(Number).sort((a, b) => a - b).forEach(i => {
+      const a = steps[i];
+      if (!a || a.act === 'hold' || a.act === 'skip' || (a.act !== 'enter' && a.act !== 'add' && a.act !== 'reduce' && a.act !== 'exit' && a.act !== 'tp')) return;
+      const t = a.act === 'enter' ? (Number.isFinite(a.at_t) ? a.at_t : R.trade.events[0].t) : a.now;
+      const px = priceAt(t); if (px == null) return;
+      const x = barX(t), y = series.priceToCoordinate(px);
+      if (x == null || y == null || x < -20 || x > w + 20) return;
+      ctx.save(); ctx.strokeStyle = C.mine; ctx.fillStyle = 'rgba(199,125,255,0.25)'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+      ctx.beginPath();
+      if (a.act === 'enter') {
+        const d = a.side === 'short' ? 1 : -1, q = 8 * k; // 숏 ▼ / 롱 ▲ — 그의 마커보다 조금 크게, 속은 비움
+        ctx.moveTo(x, y + d * q); ctx.lineTo(x - q, y - d * q); ctx.lineTo(x + q, y - d * q); ctx.closePath();
+      } else { const q = 5.5 * k; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); }
+      ctx.fill(); ctx.stroke(); ctx.restore();
+      reserve(x, y, 8 * k);
+      const txt = a.act === 'enter' ? `나 진입${a.size ? ` · ${L[a.size]}` : ''}` : `나 ${ACT_LABEL[a.act]}${a.size ? ` · ${L[a.size]}` : ''}`;
+      tag(ctx, x + 10 * k, y - LH() / 2, txt, 'rgba(10,14,20,0.85)', C.mine, { x, y });
+    });
   }
 
   function draw(ctx, w, h) {
@@ -942,7 +964,7 @@ const marks = (() => {
       const x = timeToX(R.now + KST - (R.now + KST) % sec());
       if (x != null && x >= -2 && x <= w + 2) {
         vline(ctx, x, h, R.blind ? C.now : 'rgba(247,147,26,0.45)', R.blind ? null : [6, 4]);
-        tag(ctx, Math.min(x + 3, w - 80 * k), h - Math.round(34 * k), R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
+        tag(ctx, Math.min(x + 3, w - 80 * k), 6, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
       }
     }
   }
