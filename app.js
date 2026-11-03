@@ -74,6 +74,10 @@ const IVS = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
 const IV_LABEL = { '1m': '1분', '5m': '5분', '15m': '15분', '1h': '1시간' };
 const WIN = { '1m': 3, '5m': 12, '15m': 40, '1h': 40 }; // 메모리에 둘 달 수 (1분봉은 보이는 달 ±1)
 const KDIR = 'data/klines/';
+// 리플레이 비교 화면의 「그 쪽 비중 단서」: 이 낱말이 든 글(진입 20분 전 ~ 종료)을 원문 그대로 보여준다 (04 작업지시 §3)
+// 띄어쓰기는 무시하고 찾는다 ('쎄게 때' = '쎄게때')
+const BIG_WORDS = ['풀배팅', '풀매수', '풀시드', '전재산', '최대로', '쎄게 때', '세게 때', '강하게 때', '과감', '크게 들어', '승부수', '몰빵', '올인'];
+const SIZE3 = [['probe', '시험'], ['normal', '보통'], ['big', '크게']];
 
 const C = {
   bg: '#0a0e14', grid: 'rgba(36,52,71,0.45)', border: '#243447', text: '#8a9ab0',
@@ -85,6 +89,8 @@ const C = {
 };
 
 const $ = id => document.getElementById(id);
+// 폰: 손가락 화면이고 짧은 변이 520px 이하 (와이드로 돌려도 같은 값) — 기호·글씨를 키우고 패널을 서랍으로
+const isPhone = () => { try { return matchMedia('(pointer: coarse)').matches && Math.min(innerWidth, innerHeight) <= 520; } catch { return false; } };
 
 // ───────────────────────── 저장소 (localStorage는 실패할 수 있음)
 const store = {
@@ -559,6 +565,11 @@ function updateLegend() {
   if (!bar) { ui.legend.innerHTML = S.busy ? '<span class="busy">불러오는 중…</span>' : ''; return; }
   const chg = (bar.close - bar.open) / bar.open * 100;
   const cls = bar.close >= bar.open ? 'u' : 'd';
+  if (isPhone()) { // 폰: 한 줄 (시각 · 종가 · 변화율)
+    ui.legend.innerHTML = `<span class="t">${fmtChartTime(bar.time)}</span><b class="${cls}">${fmtPrice(bar.close)}</b>` +
+      `<span class="${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` + (S.busy ? '<span class="busy">…</span>' : '');
+    return;
+  }
   ui.legend.innerHTML =
     `<span class="t">${fmtChartTime(bar.time)}</span>` +
     `<span>O <b class="${cls}">${fmtPrice(bar.open)}</b></span>` +
@@ -752,23 +763,26 @@ const marks = (() => {
     const lo = logicalToTime(Math.floor(r.from)) - KST - 3600, hi = logicalToTime(Math.ceil(r.to)) - KST + 3600;
     let i = 0, j = list.length;
     while (i < j) { const m = (i + j) >> 1; if (list[m].t < lo) i = m + 1; else j = m; }
-    const y = h - 6, selT = panel.selT();
+    const y = h - Math.round(6 * k), selT = panel.selT();
     ctx.save();
     for (; i < list.length && list[i].t <= hi; i++) {
       const p = list[i], x = barX(p.t);
       if (x == null || x < -3 || x > w + 3) continue;
       ctx.fillStyle = KCOL[p.kind] || KCOL.chat;
-      ctx.beginPath(); ctx.arc(x, y, 2.6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 2.6 * k, 0, Math.PI * 2); ctx.fill();
       if (selT === p.t && panel.selId() === p.id) {
         ctx.strokeStyle = C.btc; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 5.5 * k, 0, Math.PI * 2); ctx.stroke();
       }
       postHits.push({ x, p });
     }
     ctx.restore();
   }
   let requestUpdate = () => {};
-  const FONT = "600 10.5px 'IBM Plex Mono', Menlo, monospace";
+  // 폰에서는 기호·글씨·점을 1.3배 (손가락·작은 화면) — 그릴 때마다 k를 정한다
+  let k = 1, FONT = '';
+  const setScale = () => { k = isPhone() ? 1.3 : 1; FONT = `600 ${(10.5 * k).toFixed(1)}px 'IBM Plex Mono', Menlo, monospace`; };
+  setScale();
 
   function vline(ctx, x, h, color, dash) {
     ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.2; if (dash) ctx.setLineDash(dash);
@@ -779,16 +793,18 @@ const marks = (() => {
   // 그래도 자리가 없으면 그리지 않는다(카드에는 그대로 나온다)
   let placed = [];
   let labels = []; // 기호를 다 그린 뒤 놓을 글씨
-  const SHIFTS = [0, 16, -16, 32, -32, 48, -48];
+  const SHIFTS = [0, 1, -1, 2, -2, 3, -3]; // 줄 단위 (줄 높이 LH)
+  const LH = () => Math.round(16 * k);
   const reserve = (x, y, r) => placed.push({ x: Math.round(x - r), y: Math.round(y - r), w: Math.round(r * 2), h: Math.round(r * 2) });
   function tag(ctx, x, y, text, bg, fg, anchor = null) {
     ctx.font = FONT; const w = ctx.measureText(text).width + 8;
-    const busy = (xx, yy) => placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? 15) + 1 && r.y < yy + 16);
+    const lh = LH(), bh = lh - 1;
+    const busy = (xx, yy) => placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? bh) + 1 && r.y < yy + lh);
     const xs = anchor ? [Math.round(x), Math.round(anchor.x - 8 - w)] : [Math.round(x)];
     let px = null, py = null;
     for (const xx of xs) {
-      const off = SHIFTS.find(d => !busy(xx, y + d));
-      if (off != null) { px = xx; py = Math.round(y + off); break; }
+      const off = SHIFTS.find(d => !busy(xx, y + d * lh));
+      if (off != null) { px = xx; py = Math.round(y + off * lh); break; }
     }
     if (px == null) {
       if (anchor) return 0;             // 마커 글씨: 자리가 없으면 생략
@@ -797,10 +813,10 @@ const marks = (() => {
     placed.push({ x: px, y: py, w });
     if (anchor && (py !== Math.round(y) || px !== xs[0])) {
       ctx.save(); ctx.strokeStyle = fg; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(anchor.x, anchor.y); ctx.lineTo(px < anchor.x ? px + w : px, py + 8); ctx.stroke(); ctx.restore();
+      ctx.beginPath(); ctx.moveTo(anchor.x, anchor.y); ctx.lineTo(px < anchor.x ? px + w : px, py + bh / 2); ctx.stroke(); ctx.restore();
     }
-    ctx.fillStyle = bg; ctx.fillRect(px, py, w, 15);
-    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, px + 4, py + 8);
+    ctx.fillStyle = bg; ctx.fillRect(px, py, w, bh);
+    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, px + 4, py + bh / 2 + 0.5);
     return w;
   }
   function flushLabels(ctx) {
@@ -825,7 +841,7 @@ const marks = (() => {
         ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, prevY); ctx.lineTo(Math.round(x0) + 0.5, y); ctx.stroke();
       }
       ctx.restore();
-      if (x1 - x0 > 70 && x1 > 0 && x0 < w) labels.push({ x: Math.max(x0, 0) + 2, y: y - 17, text: (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), bg: 'rgba(10,14,20,0.75)', fg: col });
+      if (x1 - x0 > 70 && x1 > 0 && x0 < w) labels.push({ x: Math.max(x0, 0) + 2, y: y - LH() - 1, text: (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), bg: 'rgba(10,14,20,0.75)', fg: col });
       prevY = y;
     }
     if (!on) return;
@@ -842,33 +858,33 @@ const marks = (() => {
       if (e.type === 'entry') {
         const d = tr.side === 'short' ? 1 : -1; // 숏 ▼ / 롱 ▲
         ctx.fillStyle = sideC; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(x, y + d * 6); ctx.lineTo(x - 7, y - d * 6); ctx.lineTo(x + 7, y - d * 6); ctx.closePath();
+        ctx.beginPath(); ctx.moveTo(x, y + d * 6 * k); ctx.lineTo(x - 7 * k, y - d * 6 * k); ctx.lineTo(x + 7 * k, y - d * 6 * k); ctx.closePath();
         ctx.fill(); ctx.stroke();
       } else if (e.type === 'add') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x - 6 * k, y); ctx.lineTo(x + 6 * k, y); ctx.moveTo(x, y - 6 * k); ctx.lineTo(x, y + 6 * k); ctx.stroke();
         ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
-        if (Number.isFinite(e.cum)) labels.push({ x: x + 9, y: y - 7, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
+        if (Number.isFinite(e.cum)) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
       } else if (e.type === 'reduce' || e.type === 'tp') {
         if (e.corrected_by) ctx.globalAlpha = 0.45;
         ctx.fillStyle = C.reduce; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 4.5 * k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         const lab = e.type === 'tp' ? 'TP'
           : `${e.pct != null ? `${e.pct}%` : Number.isFinite(e.cum) ? `→누적 ${e.cum}%` : '?'}${e.corrected_by ? ' 정정됨' : ''}`;
         // 정정된 사건: 점은 흐리게, 글씨는 진한 바탕 위 흐린 글자로 (캔들 위에서도 읽히게)
         ctx.globalAlpha = 1;
-        labels.push({ x: x + 8, y: y - 7, text: lab, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
+        labels.push({ x: x + 8 * k, y: y - LH() / 2, text: lab, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
+        const q = 5 * k; ctx.beginPath(); ctx.moveTo(x - q, y - q); ctx.lineTo(x + q, y + q); ctx.moveTo(x + q, y - q); ctx.lineTo(x - q, y + q); ctx.stroke();
         ctx.strokeStyle = C.exit; ctx.lineWidth = 2.5; ctx.stroke();
       }
       if (hl && hl.e === e) {
         ctx.globalAlpha = 1; ctx.strokeStyle = C.btc; ctx.lineWidth = 2; ctx.setLineDash([]);
-        ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 11 * k, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.restore();
-      reserve(x, y, 7); // 기호 자리 — 글씨가 덮지 않게
+      reserve(x, y, 7 * k); // 기호 자리 — 글씨가 덮지 않게
       hits.push({ x, y, tr, e });
     }
   }
@@ -896,8 +912,11 @@ const marks = (() => {
   }
 
   function draw(ctx, w, h) {
+    setScale();
     hits = [];
     placed = []; labels = [];
+    // 왼쪽 위 시세 표시(범례) 자리도 글씨가 피한다
+    const lg = ui.legend; if (lg.offsetWidth) placed.push({ x: lg.offsetLeft - 2, y: lg.offsetTop - 2, w: lg.offsetWidth + 4, h: lg.offsetHeight + 4 });
     lastH = h;
     // 고른 글의 시각
     if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
@@ -923,7 +942,7 @@ const marks = (() => {
       const x = timeToX(R.now + KST - (R.now + KST) % sec());
       if (x != null && x >= -2 && x <= w + 2) {
         vline(ctx, x, h, R.blind ? C.now : 'rgba(247,147,26,0.45)', R.blind ? null : [6, 4]);
-        tag(ctx, Math.min(x + 3, w - 80), h - 34, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
+        tag(ctx, Math.min(x + 3, w - 80 * k), h - Math.round(34 * k), R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
       }
     }
   }
@@ -969,12 +988,12 @@ const marks = (() => {
     },
     // 글 점 탭: 맨 아래 줄 근처에서 가장 가까운 점
     hitPost(px, py) {
-      if (py < lastH - 18) return null;
-      let best = null, bd = 9;
+      if (py < lastH - 18 * k - 6) return null;
+      let best = null, bd = 9 * k;
       for (const hh of postHits) { const d = Math.abs(px - hh.x); if (d < bd) { bd = d; best = hh.p; } }
       return best;
     },
-    hitTest(px, py, tol = 14) {
+    hitTest(px, py, tol = 14 * k) {
       let best = null, bd = tol;
       for (const hh of hits) { const d = Math.hypot(px - hh.x, py - hh.y); if (d < bd) { bd = d; best = hh; } }
       return best;
@@ -1807,7 +1826,7 @@ const panel = (() => {
     if (it && scroll) scrollToEl(it.el, true);
     if (jump) {
       holdUntil = performance.now() + 1500;
-      jumpTo(p.t * 1000, { mark: false });
+      jumpTo(p.t * 1000, { mark: false, pos: overlayOpen() ? 0.25 : 0.5 }); // 서랍이 덮지 않는 왼쪽에
     }
   }
 
@@ -1850,8 +1869,31 @@ function setSide(on) {
   $('sideBtn').classList.toggle('on', on);
   store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), side: on });
 }
-$('sideBtn').addEventListener('click', () => setSide(appEl.classList.contains('noside')));
+// 폰 가로(와이드·실제 가로): 관점 패널은 차트 위로 나오는 서랍 — 기본은 닫힘, 닫으면 차트가 폭을 다 쓴다
+const phoneH = () => isPhone() && (wide.isOn() || innerWidth > innerHeight);
+const overlayOpen = () => document.documentElement.classList.contains('phone-h') && $('side').classList.contains('ov-open');
+function setOverlay(open) {
+  $('side').classList.toggle('ov-open', open);
+  $('sideBtn').classList.toggle('on', open);
+  $('gripArrow').textContent = open ? '✕' : '▴';
+}
+function applyPhone() {
+  const html = document.documentElement, ph = isPhone(), h = phoneH();
+  const was = html.classList.contains('phone-h');
+  html.classList.toggle('phone', ph);
+  html.classList.toggle('phone-h', h);
+  html.style.setProperty('--top-h', document.querySelector('.top').offsetHeight + 'px');
+  if (h !== was) $('side').classList.remove('ov-open');
+  $('sideBtn').classList.toggle('on', h ? overlayOpen() : !appEl.classList.contains('noside'));
+  chart.applyOptions({ layout: { fontSize: ph ? 12 : 11 } });
+  updateLegend(); refreshAll();
+}
+$('sideBtn').addEventListener('click', () => {
+  if (phoneH()) setOverlay(!overlayOpen());
+  else setSide(appEl.classList.contains('noside'));
+});
 $('drawerGrip').addEventListener('click', () => {
+  if (phoneH()) { setOverlay(false); return; } // 서랍 머리 탭 = 닫기
   const open = $('side').classList.toggle('open');
   $('gripArrow').textContent = open ? '▾' : '▴';
   if (open) panel.refollow();
@@ -1973,8 +2015,9 @@ function showTrade(tr) {
 }
 
 // ───────────────────────── 리플레이 답 (브라우저 저장 — 내보내기에 포함)
-// { [매매 id]: { trade, side, open, updatedAt, steps: { [사건 번호]: { act, side?, stop?, memo?, now, iv, at } } } }
-// 사건 번호 i = 그의 i번째 사건(0 = 진입)을 열기 직전에 적은 내 판단
+// { [매매 id]: { trade, side, open, updatedAt, revealed?, steps: { [사건 번호]: { act, side?, stop?, size?, at_t?, if_right?, if_wrong?, memo?, now, iv, at } } } }
+// 사건 번호 i = 그의 i번째 사건(0 = 진입)을 열기 직전에 적은 내 판단. 새 칸(size·at_t·if_right·if_wrong·revealed)은 없어도 읽힌다
+// revealed = 끝까지 봤거나 블라인드를 끄거나 「답 보기」를 해서 목록 블라인드에서도 방향·결과를 보여도 되는 매매
 const answers = (() => {
   const okStep = a => a && typeof a.act === 'string';
   let all = store.get(ANS_KEY, {}) || {};
@@ -1984,6 +2027,12 @@ const answers = (() => {
     all: () => JSON.parse(JSON.stringify(all)),
     count: () => Object.keys(all).filter(k => Object.keys(all[k].steps || {}).length).length,
     steps: id => (all[id] && all[id].steps) || {},
+    isRevealed: id => !!(all[id] && all[id].revealed),
+    reveal(tr) {
+      const rec = all[tr.id] || (all[tr.id] = { trade: tr.id, side: tr.side, open: tr.events[0].t, steps: {} });
+      if (rec.revealed) return;
+      rec.revealed = true; persist();
+    },
     set(tr, i, a) {
       const rec = all[tr.id] || (all[tr.id] = { trade: tr.id, side: tr.side, open: tr.events[0].t, steps: {} });
       rec.steps[i] = { ...a, at: new Date().toISOString() };
@@ -1996,20 +2045,45 @@ const answers = (() => {
       if (!obj || typeof obj !== 'object') return 0;
       let n = 0;
       for (const [id, rec] of Object.entries(obj)) {
-        if (!rec || typeof rec.steps !== 'object') continue;
+        if (!rec || typeof rec !== 'object') continue;
+        const steps = rec.steps && typeof rec.steps === 'object' ? rec.steps : {};
+        if (!Object.keys(steps).length && !rec.revealed) continue;
         const mine = all[id] || (all[id] = { trade: id, side: rec.side, open: rec.open, steps: {} });
-        for (const [i, a] of Object.entries(rec.steps)) {
+        if (rec.revealed) mine.revealed = true;
+        for (const [i, a] of Object.entries(steps)) {
           if (!okStep(a)) continue;
           const cur = mine.steps[i];
           if (!cur || String(a.at || '') > String(cur.at || '')) { mine.steps[i] = a; n++; }
         }
-        mine.updatedAt = Object.values(mine.steps).map(a => a.at || '').sort().pop();
+        mine.updatedAt = Object.values(mine.steps).map(a => a.at || '').sort().pop() || mine.updatedAt;
       }
       persist();
       return n;
     },
   };
 })();
+
+// 목록 블라인드 · 시작점 (04 작업지시 §1·§2) — PREF_KEY에 기억
+const listPrefs = (() => {
+  const p = store.get(PREF_KEY, {});
+  return { blind: p.listBlind !== false, start: ['30m', '2h', 'prev'].includes(p.replayStart) ? p.replayStart : '2h' };
+})();
+const saveListPrefs = () => store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), listBlind: listPrefs.blind, replayStart: listPrefs.start });
+// 이 매매의 방향·결과·꼬리표를 숨기나
+const hideAnswer = tr => listPrefs.blind && !answers.isRevealed(tr.id);
+const tradeEnd = tr => { const ex = tr.events.filter(e => e.type === 'exit').pop(); return (ex || tr.events[tr.events.length - 1]).t; };
+// 리플레이 시작 시각: 30분 전 · 2시간 전 · 직전 매매 종료부터(2시간보다 멀면 2시간 전, 겹치면 진입 시각)
+function replayStartT(tr) {
+  const entry = tr.events[0].t, two = entry - 7200;
+  let t = listPrefs.start === '30m' ? entry - 1800 : two;
+  if (listPrefs.start === 'prev') {
+    const prev = vault.trades.filter(x => x !== tr && onChart(x) && x.events[0].t < entry).pop();
+    if (prev) t = Math.min(entry, Math.max(two, tradeEnd(prev)));
+  }
+  return Math.max(Math.floor(klines.startMs() / 1000), Math.floor(t / 60) * 60);
+}
+const fmtMins = m => (m >= 60 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${m}분`);
+const hhmm = t => fmtUtc(t, false).slice(-5);
 
 const ACTS0 = [['enter', '들어간다'], ['skip', '안 들어간다']];
 const ACTS = [['hold', '유지'], ['stop', '스탑 이동'], ['reduce', '일부 정리'], ['add', '추가(불타기)'], ['tp', '익절 예약'], ['exit', '종료']];
@@ -2024,14 +2098,16 @@ const replay = (() => {
     stopPlay();
     closeModal($('tradeModal'));
     R.trade = tr; R.step = 0; R.shownT = -Infinity; R.blind = true; R.draft = null;
-    R.now = tr.events[0].t; // 진입 시각 직전 봉까지만
+    R.now = replayStartT(tr); // 고른 시작점부터 (그의 진입보다 앞)
+    R.asked0 = false;
     marks.highlight(null);
     bar.hidden = false; wrap.classList.add('replaying');
     pushSeries(true);
     panel.applyBlind();
     update();
     jumpTo(R.now * 1000, { mark: false, pos: 0.75, width: 160 });
-    setTimeout(openMine, 350);
+    if (R.now >= tr.events[0].t) { R.asked0 = true; setTimeout(openMine, 350); }
+    else toast('블라인드 시작 — 들어갈 자리라고 보이면 언제든 「✍ 여기서 들어간다」', { ms: 3500 });
   }
 
   function end() {
@@ -2077,6 +2153,10 @@ const replay = (() => {
     if (t * 1000 > klines.endMs() + 60000) { stopPlay(); toast('데이터 끝입니다 (2024-12-06)'); return false; }
     R.now = t;
     await moved();
+    // 그의 진입 시각에 닿았는데 진입 답이 없으면 멈추고 묻는다 (한 번)
+    if (t === nx && R.step === 0 && !answers.steps(R.trade.id)[0] && !R.asked0) {
+      R.asked0 = true; stopPlay(); openMine(); return false;
+    }
     return true;
   }
 
@@ -2111,6 +2191,7 @@ const replay = (() => {
 
   function toggleBlind() {
     R.blind = !R.blind;
+    if (!R.blind) answers.reveal(R.trade);
     pushSeries(true, true);
     panel.applyBlind();
     update(); refreshAll(); updateLegend();
@@ -2119,7 +2200,12 @@ const replay = (() => {
   function update() {
     if (!R.trade) return;
     const tr = R.trade, n = evs().length;
-    $('rbTitle').textContent = `${tr.id} ${SIDE_LABEL[tr.side] || ''}`;
+    // 목록 블라인드 중엔 방향을 그의 진입 사건이 열릴 때 붙인다
+    const ei = tr.events.findIndex(e => e.type === 'entry');
+    const sideOn = !hideAnswer(tr) || !R.blind || R.step > Math.max(0, ei);
+    $('rbTitle').textContent = sideOn ? `${tr.id} ${SIDE_LABEL[tr.side] || ''}` : tr.id;
+    const pre = R.step === 0 && R.now < tr.events[0].t;
+    $('rbMine').innerHTML = pre ? '✍<span class="lbl2">&nbsp;여기서 들어간다</span>' : '✍<span class="lbl2">&nbsp;나라면?</span>';
     const mine = answers.steps(tr.id)[R.step];
     $('rbInfo').textContent = `${fmtUtc(R.now)} · 사건 ${R.step}/${n}${R.blind ? '' : ' · 전체 보기'}${mine ? ' · ✍ 적음' : ''}`;
     const last = R.step > 0 ? evs()[R.step - 1] : null;
@@ -2136,8 +2222,10 @@ const replay = (() => {
     if (!R.trade) return;
     const first = R.step === 0;
     const cur = R.draft || { ...(answers.steps(R.trade.id)[R.step] || {}) };
+    const pre = first && R.now < R.trade.events[0].t;
+    if (pre && !cur.act) cur.act = 'enter'; // 진입 전 구간: 「여기서 들어간다」
     R.draft = cur;
-    $('mineTitle').textContent = first ? '나라면? — 진입 전' : `나라면? — 사건 ${R.step + 1}/${evs().length} 전`;
+    $('mineTitle').textContent = pre ? `여기서 들어간다? — ${fmtUtc(R.now)}` : first ? '나라면? — 진입 전' : `나라면? — 사건 ${R.step + 1}/${evs().length} 전`;
     const acts = first ? ACTS0 : ACTS;
     const box = $('mineActs'); box.innerHTML = '';
     for (const [k, label] of acts) {
@@ -2146,21 +2234,32 @@ const replay = (() => {
       box.appendChild(b);
     }
     $('mineMemo').value = cur.memo || '';
+    $('mineRight').value = cur.if_right || '';
+    $('mineWrong').value = cur.if_wrong || '';
     syncMine();
     openModal('mineModal');
   }
   function syncMine() {
     const cur = R.draft || {};
     const first = R.step === 0;
-    $('mineSideRow').hidden = !(first && cur.act === 'enter');
+    const enter0 = first && cur.act === 'enter';
+    $('mineSideRow').hidden = !enter0;
+    $('mineSizeRow').hidden = !(enter0 || cur.act === 'add');
+    $('mineScenRow').hidden = !enter0;
+    $('mineMemoRow').hidden = enter0 && !cur.memo; // 진입은 두 칸 — 옛 한 줄 메모가 있으면 그대로 보인다
     document.querySelectorAll('#mineSides button').forEach(b => b.classList.toggle('on', b.dataset.side === cur.side));
+    document.querySelectorAll('#mineSizes button').forEach(b => b.classList.toggle('on', b.dataset.size === cur.size));
     $('mineStop').textContent = Number.isFinite(cur.stop) ? fmtPrice(cur.stop) : '—';
     marks.refresh();
   }
   document.querySelectorAll('#mineSides button').forEach(b => b.addEventListener('click', () => { if (R.draft) { R.draft.side = b.dataset.side; syncMine(); } }));
+  document.querySelectorAll('#mineSizes button').forEach(b => b.addEventListener('click', () => {
+    if (R.draft) { R.draft.size = R.draft.size === b.dataset.size ? undefined : b.dataset.size; syncMine(); }
+  }));
+  const keepText = d => { d.memo = $('mineMemo').value; d.if_right = $('mineRight').value; d.if_wrong = $('mineWrong').value; };
   $('minePick').addEventListener('click', () => {
     if (!R.draft) return;
-    R.draft.memo = $('mineMemo').value;
+    keepText(R.draft);
     closeModal($('mineModal'));
     setTool(null); select(null);
     R.pick = true;
@@ -2169,18 +2268,25 @@ const replay = (() => {
   $('mineStopClear').addEventListener('click', () => { if (R.draft) { delete R.draft.stop; syncMine(); } });
   $('mineSave').addEventListener('click', () => {
     const d = R.draft; if (!d || !R.trade) return;
-    d.memo = $('mineMemo').value.trim();
+    keepText(d);
     if (!d.act) { toast('행동을 하나 고르세요', { error: true, ms: 2000 }); return; }
-    if (R.step === 0 && d.act === 'enter' && !d.side) { toast('방향(롱/숏)을 고르세요', { error: true, ms: 2000 }); return; }
+    const enter0 = R.step === 0 && d.act === 'enter';
+    if (enter0 && !d.side) { toast('방향(롱/숏)을 고르세요', { error: true, ms: 2000 }); return; }
     const a = { act: d.act, now: R.now, iv: S.iv };
-    if (R.step === 0 && d.act === 'enter') a.side = d.side;
+    if (enter0) {
+      a.side = d.side;
+      if (R.now < R.trade.events[0].t) a.at_t = R.now; // 그의 진입보다 앞에서 「여기서 들어간다」
+      if (d.if_right.trim()) a.if_right = d.if_right.trim();
+      if (d.if_wrong.trim()) a.if_wrong = d.if_wrong.trim();
+    }
+    if ((enter0 || d.act === 'add') && d.size) a.size = d.size;
     if (Number.isFinite(d.stop)) a.stop = d.stop;
-    if (d.memo) a.memo = d.memo;
+    if (d.memo.trim()) a.memo = d.memo.trim();
     answers.set(R.trade, R.step, a);
     R.draft = null;
     closeModal($('mineModal'));
     update(); marks.refresh();
-    toast('적었습니다 — 「다음 사건」으로 그의 행동을 여세요', { ms: 2200 });
+    toast(a.at_t ? `적었습니다 — ${hhmm(a.at_t)} 진입. ▶로 계속 보세요` : '적었습니다 — 「다음 사건」으로 그의 행동을 여세요', { ms: 2400 });
   });
   // 차트 탭으로 스탑 찍기 (onTap에서 부른다)
   function pickAt(y) {
@@ -2199,6 +2305,7 @@ const replay = (() => {
   // 끝: 그의 전 과정과 내 판단을 나란히 (같은 행동인가만 — 잘잘못 판정 없음)
   function finish() {
     const tr = R.trade; if (!tr) return;
+    answers.reveal(tr); // 끝까지 봤으니 목록 블라인드에서도 공개
     const steps = answers.steps(tr.id);
     let same = 0, diff = 0, none = 0;
     const rows = tr.events.map((e, i) => {
@@ -2209,7 +2316,7 @@ const replay = (() => {
         m = ok ? 'same' : 'diff';
       }
       if (m === 'same') same++; else if (m === 'diff') diff++; else none++;
-      const mine = a ? `${ACT_LABEL[a.act] || a.act}${a.side ? ` ${SIDE_LABEL[a.side]}` : ''}${Number.isFinite(a.stop) ? ` · 스탑 ${fmtPrice(a.stop)}` : ''}${a.memo ? `<div class="src">${esc(a.memo)}</div>` : ''}` : '—';
+      const mine = a ? mineCell(a, e) : '—';
       return `<tr><td class="t">${fmtUtc(e.t, false)}</td>
         <td><b>${EV_LABEL[e.type]}</b> ${esc(evDetail(e))}${e.corrected_by ? ' <span class="note">정정됨</span>' : ''}${e.post ? `<div class="src">${esc(postText(e.post))}</div>` : ''}</td>
         <td>${mine}</td>
@@ -2220,6 +2327,7 @@ const replay = (() => {
       <p class="sub">왼쪽은 그의 실제 사건(원문), 오른쪽은 그 사건을 열기 직전에 내가 적은 판단입니다. 「같음」은 <b>같은 행동인가</b>만 뜻합니다 — 잘잘못 판정이 아닙니다.
       같음 ${same} · 다름 ${diff} · 안 적음 ${none}${extra ? ` · 마지막 사건 뒤에 적은 답 ${extra}개(표에 없음)` : ''}</p>
       <div style="overflow:auto"><table class="cmp"><thead><tr><th>시각</th><th>그</th><th>나</th><th>같은 행동?</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${sizeBlock(tr, steps)}
       <div class="row end">
         <button class="btn danger" id="cmpClear">이 매매 답 지우기</button>
         <button class="btn" id="cmpAll">전체 보기로</button>
@@ -2233,6 +2341,45 @@ const replay = (() => {
     $('cmpAll').addEventListener('click', () => { closeModal($('cmpModal')); if (R.blind) toggleBlind(); showTrade(tr); });
     $('cmpEnd').addEventListener('click', () => { closeModal($('cmpModal')); end(); });
     openModal('cmpModal');
+  }
+
+  // 비교 표의 「나」 칸: 행동 · 방향 · 비중 · 스탑 + 진입이면 시각 차와 시나리오 두 칸
+  function mineCell(a, e) {
+    const sz = a.size ? ` · 비중 ${Object.fromEntries(SIZE3)[a.size] || a.size}` : '';
+    let h = `${ACT_LABEL[a.act] || a.act}${a.side ? ` ${SIDE_LABEL[a.side]}` : ''}${sz}${Number.isFinite(a.stop) ? ` · 스탑 ${fmtPrice(a.stop)}` : ''}`;
+    if (e.type === 'entry' && a.act === 'enter') {
+      if (Number.isFinite(a.at_t)) {
+        const m = Math.round((e.t - a.at_t) / 60);
+        h += `<div class="tdiff">나: ${hhmm(a.at_t)} 진입 / 그: ${hhmm(e.t)} 진입 → ${m > 0 ? `${fmtMins(m)} 먼저` : m < 0 ? `${fmtMins(-m)} 늦게` : '같은 시각'}</div>`;
+      } else h += '<div class="tdiff">그의 진입 시각에 적음</div>';
+      if (a.if_right) h += `<div class="scn"><b>맞다면</b> ${esc(a.if_right)}</div>`;
+      if (a.if_wrong) h += `<div class="scn"><b>틀렸다면</b> ${esc(a.if_wrong)}</div>`;
+    }
+    if (a.memo) h += `<div class="src">메모: ${esc(a.memo)}</div>`;
+    return h;
+  }
+
+  // 비중 — 나 vs 그 쪽 단서 (판정 아님 · 원문 인용). 「같은 행동?」에는 넣지 않는다
+  function sizeBlock(tr, steps) {
+    const L = Object.fromEntries(SIZE3);
+    const mine = [];
+    tr.events.forEach((e, i) => { const a = steps[i]; if (a && a.size) mine.push(`${e.type === 'entry' ? '진입' : `${hhmm(e.t)} 추가 전`} ${L[a.size] || a.size}`); });
+    const words = BIG_WORDS.map(w => w.replace(/\s+/g, ''));
+    const a0 = tr.events[0].t - 20 * 60, a1 = tradeEnd(tr);
+    const hits = vault.posts.filter(p => p.t >= a0 && p.t <= a1 && !p.photo && words.some(w => p.text.replace(/\s+/g, '').includes(w)));
+    const flagBig = tr.flags.includes('승부수');
+    const cums = tr.events.map(e => e.cum).filter(Number.isFinite);
+    const clues = hits.length || flagBig
+      ? `${flagBig ? '<div class="row" style="margin:0 0 4px"><span class="flag">꼬리표: 승부수</span></div>' : ''}
+         ${hits.length ? `<ul class="clues">${hits.map(p => `<li><div class="eh">${fmtUtc(p.t)}</div><div class="tx">${esc(p.text)}</div></li>`).join('')}</ul>` : ''}`
+      : '<div>큰 비중 선언 없음</div>';
+    return `<div class="label">비중 — 나란히 보기 (판정 아님)</div>
+      <dl class="kv" style="margin-top:4px">
+        <dt>나</dt><dd>${mine.length ? mine.join(' · ') : '적지 않음'}</dd>
+        <dt>그 쪽 단서</dt><dd style="font-family:var(--body)">${clues}
+          ${cums.length ? `<div style="margin-top:6px">누적 최대 ${Math.max(...cums)}% <span class="note">— 누적은 그날 배정 시드 안의 비중. 10월 중순부터 100%가 흔하다. 계좌 전체 비중이 아님</span></div>` : ''}</dd>
+      </dl>
+      <p class="sub" style="margin:0">단서 = 진입 20분 전 ~ 종료 사이 그의 글 중 큰 비중 낱말(${BIG_WORDS.join(' · ')})이 든 것, 원문 그대로.</p>`;
   }
 
   $('rbMine').addEventListener('click', openMine);
@@ -2255,12 +2402,19 @@ function renderTradeList() {
     li.innerHTML = `<div class="side-empty" style="padding:6px 2px">${vault.enc && !vault.posts.length ? '🔒 글·장부가 잠겨 있습니다 — 관점 패널에서 비밀번호를 넣으세요.' : '매매 데이터가 없습니다.'}</div>`;
     ul.appendChild(li); return;
   }
+  $('listBlindChk').checked = listPrefs.blind;
+  document.querySelectorAll('#startChips button').forEach(b => b.classList.toggle('on', b.dataset.s === listPrefs.start));
   for (const tr of vault.trades) {
     const B = tradeBasics(tr);
     const n = Object.keys(answers.steps(tr.id)).length;
     const li = document.createElement('li');
     const go = document.createElement('button'); go.className = 'trow';
-    go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || esc(tr.side)}</span>
+    const hide = hideAnswer(tr);
+    if (hide) { // 목록 블라인드: 날짜 · 시각 · id · ✍만
+      go.classList.add('blind');
+      go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="d id">${esc(tr.id)}</span>
+        ${onChart(tr) ? '' : `<span class="flag">${esc(tr.asset)}</span>`}${n ? `<span class="flag mine">✍ ${n}</span>` : ''}`;
+    } else go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || esc(tr.side)}</span>
       <span class="res ${resCls(mainResult(B))}" title="${B.wresult != null ? '비중 반영(누적 %)' : '첫 진입가 → 종료가'}${missingEv(tr) ? ' · 사건 빠짐: 복기에 나온 추가·정리가 장부에 없음' : ''}">${mainResult(B) == null ? (tr.status === 'closed' ? '—' : '종료 없음') : fmtPct(mainResult(B)) + (B.wresult != null ? '<sup>w</sup>' : '')}${missingEv(tr) ? ' ⚠' : ''}</span>
       ${onChart(tr) ? '' : `<span class="flag">${esc(tr.asset)}</span>`}
       <span class="d">${esc(tr.id)}</span>
@@ -2272,14 +2426,35 @@ function renderTradeList() {
       if (!onChart(tr)) { closeModal($('tradeModal')); openCard(tr); toast(`${tr.asset} 매매는 BTC 차트로 리플레이할 수 없습니다 — 원문만 봅니다`, { ms: 3500 }); return; }
       replay.start(tr);
     });
-    const see = document.createElement('button'); see.className = 'tbtn'; see.textContent = '보기'; see.title = '원문·요약 보기';
-    see.addEventListener('click', () => { closeModal($('tradeModal')); showTrade(tr); openCard(tr); });
+    const see = document.createElement('button'); see.className = 'tbtn';
+    see.textContent = hide ? '답 보기' : '보기'; see.title = '원문·요약 보기';
+    see.addEventListener('click', () => {
+      if (hide && !confirm(`${tr.id} — 결과가 보입니다. 볼까요?`)) return;
+      if (hide) answers.reveal(tr);
+      closeModal($('tradeModal')); showTrade(tr); openCard(tr);
+    });
     li.append(go, see);
     ul.appendChild(li);
   }
 }
+$('listBlindChk').addEventListener('change', e => { listPrefs.blind = e.target.checked; saveListPrefs(); renderTradeList(); });
+document.querySelectorAll('#startChips button').forEach(b => b.addEventListener('click', () => {
+  listPrefs.start = b.dataset.s; saveListPrefs();
+  document.querySelectorAll('#startChips button').forEach(x => x.classList.toggle('on', x === b));
+}));
+// 무작위로 하나: 차트에 올릴 수 있는 매매 중 아직 답을 안 적은 것 우선
+$('randomBtn').addEventListener('click', () => {
+  const ok = vault.trades.filter(onChart);
+  if (!ok.length) { toast('리플레이할 매매가 없습니다', { error: true }); return; }
+  const fresh = ok.filter(tr => !Object.keys(answers.steps(tr.id)).length);
+  const pool = fresh.length ? fresh : ok;
+  replay.start(pool[Math.floor(Math.random() * pool.length)]);
+});
 $('replayBtn').addEventListener('click', () => {
-  if (R.trade) { replay.finish(); return; }
+  if (R.trade) {
+    if (R.blind && R.step < R.trade.events.length && !confirm('아직 끝나지 않았습니다 — 나란히 보기를 열면 남은 사건이 다 보입니다. 열까요?')) return;
+    replay.finish(); return;
+  }
   renderTradeList(); openModal('tradeModal');
 });
 
@@ -2517,8 +2692,9 @@ $('wideBtn')?.addEventListener('click', () => {
   wantWide = !wantWide;
   store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), wide: wantWide });
   wide.apply(wantWide);
+  applyPhone();
 });
-window.addEventListener('resize', () => wide.apply(wantWide));
+window.addEventListener('resize', () => { wide.apply(wantWide); applyPhone(); });
 
 // ───────────────────────── 시작
 const prefs = store.get(PREF_KEY, {});
@@ -2528,6 +2704,7 @@ S.iv = IVS[prefs.iv] ? prefs.iv : '5m';
 document.querySelectorAll('#ivSeg button').forEach(b => b.classList.toggle('on', b.dataset.iv === S.iv));
 if (prefs.side === false) setSide(false);
 $('markBtn').classList.toggle('on', marks.isOn());
+applyPhone();
 updateLegend();
 klines.init()
   .then(() => loadLatest())
