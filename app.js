@@ -1991,10 +1991,13 @@ async function openCard(tr, hitEv = null) {
   const live = blindOn() && tr === R.trade && R.step < tr.events.length; // 리플레이 중이면 앞날은 숨김
   const evs = tr.events.filter(e => evShown(tr, e));
   const B = tradeBasics(tr);
-  const head = `<h3><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || tr.side}</span> ${esc(tr.id)} · ${fmtUtc(B.entry ? B.entry.t : tr.events[0].t)}</h3>
-    <div class="row" style="margin-top:4px">${tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
-    ${tr.confidence === 'low' ? '<span class="flag low">확인 필요(confidence: low)</span>' : ''}
-    ${tr.status && tr.status !== 'closed' ? `<span class="flag">${esc(tr.status)}</span>` : ''}</div>`;
+  // 블라인드 리플레이 중 그의 진입 전: 방향·시각·꼬리표를 숨긴다 (진입 시각도 답의 일부)
+  const masked = live && !entryOpened(tr);
+  const head = masked ? `<h3>${esc(tr.id)} <span class="flag">리플레이 중 — 그의 진입 전</span></h3>`
+    : `<h3><span class="side-chip ${tr.side}">${SIDE_LABEL[tr.side] || tr.side}</span> ${esc(tr.id)} · ${fmtUtc(B.entry ? B.entry.t : tr.events[0].t)}</h3>
+    <div class="row" style="margin-top:4px">${live ? '' : tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
+    ${!live && tr.confidence === 'low' ? '<span class="flag low">확인 필요(confidence: low)</span>' : ''}
+    ${!live && tr.status && tr.status !== 'closed' ? `<span class="flag">${esc(tr.status)}</span>` : ''}</div>`;
   const kv = live ? '<p class="sub" style="margin-top:10px">리플레이 중 — 요약은 끝나면 보입니다.</p>' : `<dl class="kv">
     <dt>진입가</dt><dd>${B.ep != null ? fmtPrice(B.ep) : '—'}</dd>
     ${farStops(tr, B.ep).map(e => `<dt class="note">⚠ 스탑 확인</dt><dd class="note">${fmtUtc(e.t, false)} 스탑 ${fmtPrice(e.stop)} — 진입가에서 ${((e.stop - B.ep) / B.ep * 100).toFixed(1)}% (장부 확인 필요할 수 있음)</dd>`).join('')}
@@ -2093,6 +2096,8 @@ const listPrefs = (() => {
 const saveListPrefs = () => store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), listBlind: listPrefs.blind, replayStart: listPrefs.start });
 // 이 매매의 방향·결과·꼬리표를 숨기나
 const hideAnswer = tr => listPrefs.blind && !answers.isRevealed(tr.id);
+// 블라인드 리플레이 중인 이 매매의 진입 사건이 이미 열렸나 (그 전엔 방향·꼬리표를 어디에도 띄우지 않는다)
+const entryOpened = tr => { const ei = tr.events.findIndex(e => e.type === 'entry'); return R.step > Math.max(0, ei); };
 const tradeEnd = tr => { const ex = tr.events.filter(e => e.type === 'exit').pop(); return (ex || tr.events[tr.events.length - 1]).t; };
 // 리플레이 시작 시각: 30분 전 · 2시간 전 · 직전 매매 종료부터(2시간보다 멀면 2시간 전, 겹치면 진입 시각)
 function replayStartT(tr) {
@@ -2222,9 +2227,8 @@ const replay = (() => {
   function update() {
     if (!R.trade) return;
     const tr = R.trade, n = evs().length;
-    // 목록 블라인드 중엔 방향을 그의 진입 사건이 열릴 때 붙인다
-    const ei = tr.events.findIndex(e => e.type === 'entry');
-    const sideOn = !hideAnswer(tr) || !R.blind || R.step > Math.max(0, ei);
+    // 블라인드 리플레이 중엔 방향을 그의 진입 사건이 열릴 때 붙인다 (목록 공개 여부와 상관없이 — 다시 보는 매매도 같음)
+    const sideOn = !R.blind || entryOpened(tr);
     $('rbTitle').textContent = sideOn ? `${tr.id} ${SIDE_LABEL[tr.side] || ''}` : tr.id;
     const pre = R.step === 0 && R.now < tr.events[0].t;
     $('rbMine').innerHTML = pre ? '✍<span class="lbl2">&nbsp;여기서 들어간다</span>' : '✍<span class="lbl2">&nbsp;나라면?</span>';
