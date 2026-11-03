@@ -430,6 +430,30 @@
     html.wide .side .side-empty { display:block; }
     html.wide .side-head .follow { display:flex; }
   }
+
+  /* ───────── 폰 (app.js가 html.phone / html.phone-h를 붙인다) ───────── */
+  html.phone .legend { font-size:12.5px; gap:2px 10px; flex-wrap:nowrap; white-space:nowrap; }
+  /* 가로(와이드·실제 가로): 관점 패널은 차트 위로 나오는 서랍, 닫으면 차트가 폭을 다 쓴다 */
+  html.phone-h .app, html.phone-h .app.noside { position:relative; grid-template-columns: 46px minmax(0, 1fr) 0 !important; }
+  html.phone-h .side, html.phone-h .app.noside .side, html.phone-h .side.open {
+    display:flex !important; position:absolute; grid-area:auto; right:0; top:var(--top-h, 44px); bottom:0; height:auto; max-height:none;
+    width:min(340px, 52%); z-index:12; border-left:1px solid var(--border2); border-top:0;
+    box-shadow:-10px 0 28px rgba(0,0,0,0.55); transform:translateX(105%); transition:transform .2s ease; visibility:hidden;
+  }
+  html.phone-h .side.ov-open { transform:none; visibility:visible; }
+  html.phone-h .side .side-tools, html.phone-h .side .side-body:not([hidden]) { display:flex !important; }
+  html.phone-h .side .side-empty:not([hidden]), html.phone-h .side .notice-box:not([hidden]) { display:block !important; }
+  html.phone-h .side-head .follow { display:flex !important; }
+  html.phone-h .drawer-grip .arrow { display:inline !important; margin-left:auto; }
+  html.phone-h #sideBtn { display:inline-flex !important; }
+  /* 가로 폰 머리줄: 한 줄 · 아이콘만 (844px처럼 720px보다 넓어도) */
+  html.phone-h .top { padding:4px 8px; gap:5px; flex-wrap:nowrap; }
+  html.phone-h .venue, html.phone-h .logo span, html.phone-h .live.fixed, html.phone-h .seg .l, html.phone-h .top .btn .lbl { display:none; }
+  html.phone-h .seg .s { display:inline; }
+  html.phone-h .seg button { padding:5px 8px; font-size:12px; }
+  html.phone-h .top .btn { padding:5px 7px; }
+  html.phone-h .top .btn svg { width:17px; height:17px; }
+  html.phone-h .logo { font-size:15px; letter-spacing:0; }
 </style>
 </head>
 <body>
@@ -669,6 +693,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

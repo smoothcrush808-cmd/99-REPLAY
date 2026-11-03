@@ -85,6 +85,8 @@ const C = {
 };
 
 const $ = id => document.getElementById(id);
+// 폰: 손가락 화면이고 짧은 변이 520px 이하 (와이드로 돌려도 같은 값) — 기호·글씨를 키우고 패널을 서랍으로
+const isPhone = () => { try { return matchMedia('(pointer: coarse)').matches && Math.min(innerWidth, innerHeight) <= 520; } catch { return false; } };
 
 // ───────────────────────── 저장소 (localStorage는 실패할 수 있음)
 const store = {
@@ -559,6 +561,11 @@ function updateLegend() {
   if (!bar) { ui.legend.innerHTML = S.busy ? '<span class="busy">불러오는 중…</span>' : ''; return; }
   const chg = (bar.close - bar.open) / bar.open * 100;
   const cls = bar.close >= bar.open ? 'u' : 'd';
+  if (isPhone()) { // 폰: 한 줄 (시각 · 종가 · 변화율)
+    ui.legend.innerHTML = `<span class="t">${fmtChartTime(bar.time)}</span><b class="${cls}">${fmtPrice(bar.close)}</b>` +
+      `<span class="${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` + (S.busy ? '<span class="busy">…</span>' : '');
+    return;
+  }
   ui.legend.innerHTML =
     `<span class="t">${fmtChartTime(bar.time)}</span>` +
     `<span>O <b class="${cls}">${fmtPrice(bar.open)}</b></span>` +
@@ -752,23 +759,26 @@ const marks = (() => {
     const lo = logicalToTime(Math.floor(r.from)) - KST - 3600, hi = logicalToTime(Math.ceil(r.to)) - KST + 3600;
     let i = 0, j = list.length;
     while (i < j) { const m = (i + j) >> 1; if (list[m].t < lo) i = m + 1; else j = m; }
-    const y = h - 6, selT = panel.selT();
+    const y = h - Math.round(6 * k), selT = panel.selT();
     ctx.save();
     for (; i < list.length && list[i].t <= hi; i++) {
       const p = list[i], x = barX(p.t);
       if (x == null || x < -3 || x > w + 3) continue;
       ctx.fillStyle = KCOL[p.kind] || KCOL.chat;
-      ctx.beginPath(); ctx.arc(x, y, 2.6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 2.6 * k, 0, Math.PI * 2); ctx.fill();
       if (selT === p.t && panel.selId() === p.id) {
         ctx.strokeStyle = C.btc; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 5.5 * k, 0, Math.PI * 2); ctx.stroke();
       }
       postHits.push({ x, p });
     }
     ctx.restore();
   }
   let requestUpdate = () => {};
-  const FONT = "600 10.5px 'IBM Plex Mono', Menlo, monospace";
+  // 폰에서는 기호·글씨·점을 1.3배 (손가락·작은 화면) — 그릴 때마다 k를 정한다
+  let k = 1, FONT = '';
+  const setScale = () => { k = isPhone() ? 1.3 : 1; FONT = `600 ${(10.5 * k).toFixed(1)}px 'IBM Plex Mono', Menlo, monospace`; };
+  setScale();
 
   function vline(ctx, x, h, color, dash) {
     ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.2; if (dash) ctx.setLineDash(dash);
@@ -779,16 +789,18 @@ const marks = (() => {
   // 그래도 자리가 없으면 그리지 않는다(카드에는 그대로 나온다)
   let placed = [];
   let labels = []; // 기호를 다 그린 뒤 놓을 글씨
-  const SHIFTS = [0, 16, -16, 32, -32, 48, -48];
+  const SHIFTS = [0, 1, -1, 2, -2, 3, -3]; // 줄 단위 (줄 높이 LH)
+  const LH = () => Math.round(16 * k);
   const reserve = (x, y, r) => placed.push({ x: Math.round(x - r), y: Math.round(y - r), w: Math.round(r * 2), h: Math.round(r * 2) });
   function tag(ctx, x, y, text, bg, fg, anchor = null) {
     ctx.font = FONT; const w = ctx.measureText(text).width + 8;
-    const busy = (xx, yy) => placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? 15) + 1 && r.y < yy + 16);
+    const lh = LH(), bh = lh - 1;
+    const busy = (xx, yy) => placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? bh) + 1 && r.y < yy + lh);
     const xs = anchor ? [Math.round(x), Math.round(anchor.x - 8 - w)] : [Math.round(x)];
     let px = null, py = null;
     for (const xx of xs) {
-      const off = SHIFTS.find(d => !busy(xx, y + d));
-      if (off != null) { px = xx; py = Math.round(y + off); break; }
+      const off = SHIFTS.find(d => !busy(xx, y + d * lh));
+      if (off != null) { px = xx; py = Math.round(y + off * lh); break; }
     }
     if (px == null) {
       if (anchor) return 0;             // 마커 글씨: 자리가 없으면 생략
@@ -797,10 +809,10 @@ const marks = (() => {
     placed.push({ x: px, y: py, w });
     if (anchor && (py !== Math.round(y) || px !== xs[0])) {
       ctx.save(); ctx.strokeStyle = fg; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(anchor.x, anchor.y); ctx.lineTo(px < anchor.x ? px + w : px, py + 8); ctx.stroke(); ctx.restore();
+      ctx.beginPath(); ctx.moveTo(anchor.x, anchor.y); ctx.lineTo(px < anchor.x ? px + w : px, py + bh / 2); ctx.stroke(); ctx.restore();
     }
-    ctx.fillStyle = bg; ctx.fillRect(px, py, w, 15);
-    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, px + 4, py + 8);
+    ctx.fillStyle = bg; ctx.fillRect(px, py, w, bh);
+    ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, px + 4, py + bh / 2 + 0.5);
     return w;
   }
   function flushLabels(ctx) {
@@ -825,7 +837,7 @@ const marks = (() => {
         ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, prevY); ctx.lineTo(Math.round(x0) + 0.5, y); ctx.stroke();
       }
       ctx.restore();
-      if (x1 - x0 > 70 && x1 > 0 && x0 < w) labels.push({ x: Math.max(x0, 0) + 2, y: y - 17, text: (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), bg: 'rgba(10,14,20,0.75)', fg: col });
+      if (x1 - x0 > 70 && x1 > 0 && x0 < w) labels.push({ x: Math.max(x0, 0) + 2, y: y - LH() - 1, text: (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), bg: 'rgba(10,14,20,0.75)', fg: col });
       prevY = y;
     }
     if (!on) return;
@@ -842,33 +854,33 @@ const marks = (() => {
       if (e.type === 'entry') {
         const d = tr.side === 'short' ? 1 : -1; // 숏 ▼ / 롱 ▲
         ctx.fillStyle = sideC; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(x, y + d * 6); ctx.lineTo(x - 7, y - d * 6); ctx.lineTo(x + 7, y - d * 6); ctx.closePath();
+        ctx.beginPath(); ctx.moveTo(x, y + d * 6 * k); ctx.lineTo(x - 7 * k, y - d * 6 * k); ctx.lineTo(x + 7 * k, y - d * 6 * k); ctx.closePath();
         ctx.fill(); ctx.stroke();
       } else if (e.type === 'add') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x + 6, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 6); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x - 6 * k, y); ctx.lineTo(x + 6 * k, y); ctx.moveTo(x, y - 6 * k); ctx.lineTo(x, y + 6 * k); ctx.stroke();
         ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
-        if (Number.isFinite(e.cum)) labels.push({ x: x + 9, y: y - 7, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
+        if (Number.isFinite(e.cum)) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
       } else if (e.type === 'reduce' || e.type === 'tp') {
         if (e.corrected_by) ctx.globalAlpha = 0.45;
         ctx.fillStyle = C.reduce; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 4.5 * k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         const lab = e.type === 'tp' ? 'TP'
           : `${e.pct != null ? `${e.pct}%` : Number.isFinite(e.cum) ? `→누적 ${e.cum}%` : '?'}${e.corrected_by ? ' 정정됨' : ''}`;
         // 정정된 사건: 점은 흐리게, 글씨는 진한 바탕 위 흐린 글자로 (캔들 위에서도 읽히게)
         ctx.globalAlpha = 1;
-        labels.push({ x: x + 8, y: y - 7, text: lab, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
+        labels.push({ x: x + 8 * k, y: y - LH() / 2, text: lab, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5); ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5); ctx.stroke();
+        const q = 5 * k; ctx.beginPath(); ctx.moveTo(x - q, y - q); ctx.lineTo(x + q, y + q); ctx.moveTo(x + q, y - q); ctx.lineTo(x - q, y + q); ctx.stroke();
         ctx.strokeStyle = C.exit; ctx.lineWidth = 2.5; ctx.stroke();
       }
       if (hl && hl.e === e) {
         ctx.globalAlpha = 1; ctx.strokeStyle = C.btc; ctx.lineWidth = 2; ctx.setLineDash([]);
-        ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, 11 * k, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.restore();
-      reserve(x, y, 7); // 기호 자리 — 글씨가 덮지 않게
+      reserve(x, y, 7 * k); // 기호 자리 — 글씨가 덮지 않게
       hits.push({ x, y, tr, e });
     }
   }
@@ -896,8 +908,11 @@ const marks = (() => {
   }
 
   function draw(ctx, w, h) {
+    setScale();
     hits = [];
     placed = []; labels = [];
+    // 왼쪽 위 시세 표시(범례) 자리도 글씨가 피한다
+    const lg = ui.legend; if (lg.offsetWidth) placed.push({ x: lg.offsetLeft - 2, y: lg.offsetTop - 2, w: lg.offsetWidth + 4, h: lg.offsetHeight + 4 });
     lastH = h;
     // 고른 글의 시각
     if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
@@ -923,7 +938,7 @@ const marks = (() => {
       const x = timeToX(R.now + KST - (R.now + KST) % sec());
       if (x != null && x >= -2 && x <= w + 2) {
         vline(ctx, x, h, R.blind ? C.now : 'rgba(247,147,26,0.45)', R.blind ? null : [6, 4]);
-        tag(ctx, Math.min(x + 3, w - 80), h - 34, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
+        tag(ctx, Math.min(x + 3, w - 80 * k), h - Math.round(34 * k), R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
       }
     }
   }
@@ -969,12 +984,12 @@ const marks = (() => {
     },
     // 글 점 탭: 맨 아래 줄 근처에서 가장 가까운 점
     hitPost(px, py) {
-      if (py < lastH - 18) return null;
-      let best = null, bd = 9;
+      if (py < lastH - 18 * k - 6) return null;
+      let best = null, bd = 9 * k;
       for (const hh of postHits) { const d = Math.abs(px - hh.x); if (d < bd) { bd = d; best = hh.p; } }
       return best;
     },
-    hitTest(px, py, tol = 14) {
+    hitTest(px, py, tol = 14 * k) {
       let best = null, bd = tol;
       for (const hh of hits) { const d = Math.hypot(px - hh.x, py - hh.y); if (d < bd) { bd = d; best = hh; } }
       return best;
@@ -1807,7 +1822,7 @@ const panel = (() => {
     if (it && scroll) scrollToEl(it.el, true);
     if (jump) {
       holdUntil = performance.now() + 1500;
-      jumpTo(p.t * 1000, { mark: false });
+      jumpTo(p.t * 1000, { mark: false, pos: overlayOpen() ? 0.25 : 0.5 }); // 서랍이 덮지 않는 왼쪽에
     }
   }
 
@@ -1850,8 +1865,31 @@ function setSide(on) {
   $('sideBtn').classList.toggle('on', on);
   store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), side: on });
 }
-$('sideBtn').addEventListener('click', () => setSide(appEl.classList.contains('noside')));
+// 폰 가로(와이드·실제 가로): 관점 패널은 차트 위로 나오는 서랍 — 기본은 닫힘, 닫으면 차트가 폭을 다 쓴다
+const phoneH = () => isPhone() && (wide.isOn() || innerWidth > innerHeight);
+const overlayOpen = () => document.documentElement.classList.contains('phone-h') && $('side').classList.contains('ov-open');
+function setOverlay(open) {
+  $('side').classList.toggle('ov-open', open);
+  $('sideBtn').classList.toggle('on', open);
+  $('gripArrow').textContent = open ? '✕' : '▴';
+}
+function applyPhone() {
+  const html = document.documentElement, ph = isPhone(), h = phoneH();
+  const was = html.classList.contains('phone-h');
+  html.classList.toggle('phone', ph);
+  html.classList.toggle('phone-h', h);
+  html.style.setProperty('--top-h', document.querySelector('.top').offsetHeight + 'px');
+  if (h !== was) $('side').classList.remove('ov-open');
+  $('sideBtn').classList.toggle('on', h ? overlayOpen() : !appEl.classList.contains('noside'));
+  chart.applyOptions({ layout: { fontSize: ph ? 12 : 11 } });
+  updateLegend(); refreshAll();
+}
+$('sideBtn').addEventListener('click', () => {
+  if (phoneH()) setOverlay(!overlayOpen());
+  else setSide(appEl.classList.contains('noside'));
+});
 $('drawerGrip').addEventListener('click', () => {
+  if (phoneH()) { setOverlay(false); return; } // 서랍 머리 탭 = 닫기
   const open = $('side').classList.toggle('open');
   $('gripArrow').textContent = open ? '▾' : '▴';
   if (open) panel.refollow();
@@ -2517,8 +2555,9 @@ $('wideBtn')?.addEventListener('click', () => {
   wantWide = !wantWide;
   store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), wide: wantWide });
   wide.apply(wantWide);
+  applyPhone();
 });
-window.addEventListener('resize', () => wide.apply(wantWide));
+window.addEventListener('resize', () => { wide.apply(wantWide); applyPhone(); });
 
 // ───────────────────────── 시작
 const prefs = store.get(PREF_KEY, {});
@@ -2528,6 +2567,7 @@ S.iv = IVS[prefs.iv] ? prefs.iv : '5m';
 document.querySelectorAll('#ivSeg button').forEach(b => b.classList.toggle('on', b.dataset.iv === S.iv));
 if (prefs.side === false) setSide(false);
 $('markBtn').classList.toggle('on', marks.isOn());
+applyPhone();
 updateLegend();
 klines.init()
   .then(() => loadLatest())
