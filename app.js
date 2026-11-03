@@ -741,7 +741,8 @@ const marks = (() => {
     const entry = tr.events.find(e => e.type === 'entry') || tr.events[0];
     if (!evShown(tr, entry)) return;
     const { exit } = tradeBasics(tr);
-    const end = exit && evShown(tr, exit) ? exit.t : blindOn() && tr === R.trade ? R.now : tr.events[tr.events.length - 1].t;
+    // 블라인드 중엔 어느 매매든 「여기까지」를 넘어 칠하지 않는다 (끝나는 시각도 앞날)
+    const end = exit && evShown(tr, exit) ? exit.t : blindOn() ? R.now : tr.events[tr.events.length - 1].t;
     const x0 = barX(entry.t), x1 = barX(end);
     if (x0 == null || x1 == null || x1 < 0 || x0 > w) return;
     const long = tr.side !== 'short';
@@ -860,6 +861,8 @@ const marks = (() => {
         ctx.fillStyle = sideC; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(x, y + d * 6 * k); ctx.lineTo(x - 7 * k, y - d * 6 * k); ctx.lineTo(x + 7 * k, y - d * 6 * k); ctx.closePath();
         ctx.fill(); ctx.stroke();
+        // 리플레이 중 다른 매매(지난 매매)의 진입엔 매매 id를 붙여 연습 중인 매매와 헷갈리지 않게
+        if (R.trade && tr !== R.trade) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `${tr.id} (지난 매매)`, bg: 'rgba(10,14,20,0.85)', fg: C.text, anchor: { x, y } });
       } else if (e.type === 'add') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 6 * k, y); ctx.lineTo(x + 6 * k, y); ctx.moveTo(x, y - 6 * k); ctx.lineTo(x, y + 6 * k); ctx.stroke();
