@@ -2094,9 +2094,12 @@ const answers = (() => {
 // 목록 블라인드 · 시작점 (04 작업지시 §1·§2) — PREF_KEY에 기억
 const listPrefs = (() => {
   const p = store.get(PREF_KEY, {});
-  return { blind: p.listBlind !== false, start: ['30m', '2h', 'prev'].includes(p.replayStart) ? p.replayStart : '2h' };
+  return {
+    blind: p.listBlind !== false, start: ['30m', '2h', 'prev'].includes(p.replayStart) ? p.replayStart : '2h',
+    mode: p.replayMode === 'practice' ? 'practice' : 'watch', // 보기(그대로 재생) | 연습(블라인드·나라면?)
+  };
 })();
-const saveListPrefs = () => store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), listBlind: listPrefs.blind, replayStart: listPrefs.start });
+const saveListPrefs = () => store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), listBlind: listPrefs.blind, replayStart: listPrefs.start, replayMode: listPrefs.mode });
 // 이 매매의 방향·결과·꼬리표를 숨기나
 const hideAnswer = tr => listPrefs.blind && !answers.isRevealed(tr.id);
 // 블라인드 리플레이 중인 이 매매의 진입 사건이 이미 열렸나 (그 전엔 방향·꼬리표를 어디에도 띄우지 않는다)
@@ -2112,6 +2115,38 @@ function replayStartT(tr) {
   }
   return Math.max(Math.floor(klines.startMs() / 1000), Math.floor(t / 60) * 60);
 }
+// 그 시각까지 열린 사건으로 본 포지션: 누적(그가 적은 cum) · 평단(그가 적은 avg → 누적으로 계산 → 첫 진입가) · 배율(lev · size 글)
+function posAt(tr, T) {
+  const B = tradeBasics(tr);
+  let opened = false, closed = false, qty = null, avg = null, said = false, lev = null;
+  for (const e of tr.events) {
+    if (e.t > T) break;
+    if (e.corrected_by) continue;
+    if (e.type === 'entry') opened = true;
+    if (e.type === 'exit') { closed = true; if (qty != null) qty = 0; }
+    else if (Number.isFinite(e.cum) && (e.type === 'entry' || e.type === 'add' || e.type === 'reduce')) qty = e.cum;
+    if (Number.isFinite(e.lev)) lev = e.lev;
+    if (Number.isFinite(e.avg)) { avg = e.avg; said = true; }
+  }
+  for (const z of Array.isArray(tr.size) ? tr.size : []) {
+    if (!(z.t <= T)) continue;
+    const m = /(\d+(?:\.\d+)?)\s*배/.exec(z.note || ''); if (m) lev = +m[1];
+  }
+  if (avg == null && B.pos && B.pos.ok) for (const p of B.pos.path) { if (p.t > T) break; if (p.avg != null) avg = p.avg; }
+  if (avg == null) avg = B.ep;
+  return { opened, closed, qty, avg, said, lev };
+}
+// 누적 % 계단 (보기 리플레이 비중 상자): [{t, q}] — cum이 적힌 사건과 종료(0)만
+function cumSteps(tr) {
+  const out = [];
+  for (const e of tr.events) {
+    if (e.corrected_by) continue;
+    if (e.type === 'exit') { if (out.length) out.push({ t: e.t, q: 0 }); }
+    else if (Number.isFinite(e.cum) && (e.type === 'entry' || e.type === 'add' || e.type === 'reduce')) out.push({ t: e.t, q: e.cum });
+  }
+  return out;
+}
+
 const fmtMins = m => (m >= 60 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${m}분`);
 const hhmm = t => fmtUtc(t, false).slice(-5);
 
@@ -2124,10 +2159,14 @@ const replay = (() => {
   const bar = $('rbar'), wrap = document.querySelector('.chart-wrap');
   const evs = () => R.trade.events;
 
-  function start(tr) {
+  function start(tr, mode = listPrefs.mode) {
     stopPlay();
     closeModal($('tradeModal'));
     R.trade = tr; R.step = 0; R.shownT = -Infinity; R.blind = true; R.draft = null;
+    R.mode = mode; R.hold = 0;
+    bar.classList.toggle('watch', mode === 'watch');
+    if (mode === 'watch') return startWatch(tr);
+    $('sizeBox').hidden = true;
     R.now = replayStartT(tr); // 고른 시작점부터 (그의 진입보다 앞)
     R.asked0 = false;
     marks.highlight(null);
@@ -2140,9 +2179,73 @@ const replay = (() => {
     else toast('블라인드 시작 — 들어갈 자리라고 보이면 언제든 「✍ 여기서 들어간다」', { ms: 3500 });
   }
 
+  // ───── 보기 리플레이: 진입 10분 전 ~ 종료 10분 뒤를 저절로 재생, 사건마다 잠깐 멈춤, 묻지 않음
+  function startWatch(tr) {
+    answers.reveal(tr); // 보는 매매는 연습 목록에서도 공개
+    const first = tr.events[0].t;
+    R.startT = Math.max(Math.floor(klines.startMs() / 1000), Math.floor((first - 600) / 60) * 60);
+    R.endT = tradeEnd(tr) + 600;
+    R.now = R.startT;
+    syncStep(false);
+    marks.highlight(null);
+    bar.hidden = false; wrap.classList.add('replaying');
+    $('sizeBox').hidden = false;
+    pushSeries(true);
+    panel.applyBlind();
+    update();
+    jumpTo(R.now * 1000, { mark: false, pos: 0.6, width: Math.max(90, Math.min(240, (R.endT - R.startT) / sec() * 0.7)) });
+    setTimeout(() => { if (R.trade === tr && !R.timer) play(); }, 700);
+  }
+  // 보기: R.now까지 지난 사건을 연다 (시각 기준 — 뒤로 가기도 된다). 새로 열린 게 있으면 true
+  function syncStep(fx = true) {
+    const list = evs();
+    let n = 0;
+    while (n < list.length && list[n].t <= R.now) n++;
+    const grew = n > R.step;
+    R.step = n; R.shownT = n ? list[n - 1].t : -Infinity;
+    if (fx && grew) {
+      const e = list[n - 1];
+      if (e.post) panel.select(e.post, { jump: false, scroll: true });
+      marks.highlight(R.trade, e);
+      const ev = $('rbEvent'); ev.classList.remove('flash'); void ev.offsetWidth; ev.classList.add('flash');
+    }
+    return grew;
+  }
+  async function stepWatch() {
+    const s = sec();
+    const t = Math.floor(R.now / s) * s + s;
+    if (t > R.endT || t * 1000 > klines.endMs() + 60000) {
+      stopPlay();
+      const B = tradeBasics(R.trade), r = mainResult(B);
+      toast(`끝 — ${R.trade.id} ${SIDE_LABEL[R.trade.side] || ''} ${r == null ? '' : fmtPct(r)}${B.wresult != null ? '(비중 반영)' : ''}`, { ms: 3500 });
+      return false;
+    }
+    R.now = t;
+    const grew = syncStep();
+    await moved();
+    if (grew) R.hold = performance.now() + 1600; // 사건마다 잠깐 멈춰 원문을 읽게
+    return true;
+  }
+  async function jumpEvent(dir) {
+    if (!R.trade) return;
+    const list = evs();
+    if (dir > 0) {
+      if (R.step >= list.length) { toast('마지막 사건까지 봤습니다', { ms: 1800 }); return; }
+      R.now = Math.max(R.now, list[R.step].t);
+    } else {
+      // 마지막으로 열린 사건 직전으로 (누를수록 더 뒤로)
+      const back = R.step > 0 ? list[R.step - 1].t - sec() : R.startT;
+      R.now = Math.max(R.startT, Math.floor(back / 60) * 60);
+    }
+    R.hold = 0;
+    syncStep();
+    await moved();
+  }
+
   function end() {
     stopPlay();
-    R.trade = null; R.draft = null; R.pick = false;
+    R.trade = null; R.draft = null; R.pick = false; R.mode = null;
+    bar.classList.remove('watch'); $('sizeBox').hidden = true;
     bar.hidden = true; wrap.classList.remove('replaying');
     pushSeries(true, true);
     panel.applyBlind();
@@ -2174,6 +2277,7 @@ const replay = (() => {
   // ▶ 1봉 — 다음 사건 시각에서 멈춘다 (그 전에 「나라면?」을 적을 수 있게)
   async function step() {
     if (!R.trade) return false;
+    if (R.mode === 'watch') return stepWatch();
     const s = sec(), nx = R.step < evs().length ? evs()[R.step].t : Infinity;
     let t = Math.floor(R.now / s) * s + s;
     if (t > nx) {
@@ -2193,6 +2297,7 @@ const replay = (() => {
   // ▶▶ 다음 사건 — 그의 실제 행동 하나를 원문과 함께 연다
   async function next() {
     if (!R.trade) return;
+    if (R.mode === 'watch') return jumpEvent(1);
     stopPlay();
     if (R.step >= evs().length) { finish(); return; }
     const e = evs()[R.step];
@@ -2209,14 +2314,20 @@ const replay = (() => {
     const sp = +$('rbSpeed').value || 3;
     let busy = false;
     R.timer = setInterval(async () => {
-      if (busy) return; busy = true;
+      if (busy || (R.hold && performance.now() < R.hold)) return;
+      busy = true;
       try { if (!(await step())) stopPlay(); } finally { busy = false; }
     }, 1000 / sp);
-    $('rbPlay').classList.add('on');
+    playBtn(true);
   }
   function stopPlay() {
     clearInterval(R.timer); R.timer = 0;
-    $('rbPlay').classList.remove('on');
+    playBtn(false);
+  }
+  // 재생 중엔 ⏸ (누르면 멈춤), 멈춰 있으면 ⏵
+  function playBtn(on) {
+    const b = $('rbPlay'); b.classList.toggle('on', on);
+    b.innerHTML = on ? '⏸<span class="lbl2">&nbsp;멈춤</span>' : `⏵<span class="lbl2">&nbsp;${R.mode === 'watch' ? '재생' : '자동'}</span>`;
   }
 
   function toggleBlind() {
@@ -2229,6 +2340,7 @@ const replay = (() => {
 
   function update() {
     if (!R.trade) return;
+    if (R.mode === 'watch') return updateWatch();
     const tr = R.trade, n = evs().length;
     // 블라인드 리플레이 중엔 방향을 그의 진입 사건이 열릴 때 붙인다 (목록 공개 여부와 상관없이 — 다시 보는 매매도 같음)
     const sideOn = !R.blind || entryOpened(tr);
@@ -2244,6 +2356,80 @@ const replay = (() => {
     $('rbNext').innerHTML = R.step >= n ? '끝<span class="lbl2">&nbsp;· 나란히 보기</span>' : '▶▶<span class="lbl2">&nbsp;다음 사건</span>';
     $('rbBlind').classList.toggle('on', R.blind);
     $('rbBlind').textContent = R.blind ? '블라인드' : '전체 보기';
+  }
+
+  function updateWatch() {
+    const tr = R.trade, n = evs().length, P = posAt(tr, R.now);
+    $('rbTitle').textContent = `${tr.id} ${SIDE_LABEL[tr.side] || ''}`;
+    $('rbInfo').textContent = `${fmtUtc(R.now)} · 사건 ${R.step}/${n}`;
+    const last = R.step > 0 ? evs()[R.step - 1] : null;
+    $('rbEvent').innerHTML = last
+      ? `<span class="who">${hhmm(last.t)} ${EV_LABEL[last.type]} ${esc(evDetail(last))}</span>${esc(postText(last.post))}`
+      : '';
+    // 지금 포지션 한 줄: 방향 · 누적 · 평단 · 배율 · 평단 대비 · 보유
+    let h;
+    if (!P.opened) h = '<span>진입 전</span>';
+    else {
+      const bar0 = S.bars[shownLen - 1], dir = tr.side === 'short' ? -1 : 1;
+      const mv = bar0 && P.avg ? dir * (bar0.close - P.avg) / P.avg * 100 : null;
+      const parts = [`<span class="side ${tr.side}">${SIDE_LABEL[tr.side] || ''}</span>`];
+      parts.push(P.closed ? '<b>종료</b>' : P.qty != null ? `<span class="cum">누적 ${P.qty}%</span>` : '<span>누적 기록 없음</span>');
+      if (!P.closed && P.avg) parts.push(`<span>평단 <b>${fmtAxis(P.avg)}</b>${P.said ? '(글)' : ''}</span>`);
+      if (P.lev) parts.push(`<span>레버 <b>${P.lev}배</b></span>`);
+      if (!P.closed && mv != null) parts.push(`<span class="${mv >= 0 ? 'u' : 'd'}">${fmtPct(mv)}</span>`);
+      if (P.closed) { const r = mainResult(tradeBasics(tr)); if (r != null) parts.push(`<span class="${r >= 0 ? 'u' : 'd'}">결과 ${fmtPct(r)}</span>`); }
+      else parts.push(`<span>${fmtDur(R.now - tr.events[0].t)}</span>`);
+      h = parts.join('');
+    }
+    $('rbPos').innerHTML = h;
+    $('rbNext').innerHTML = '▶▶<span class="lbl2">&nbsp;다음</span>';
+    drawSizeBox(P);
+  }
+
+  // 비중 상자: 누적 % 계단을 지금 시각까지만 (진입 ~ 종료 폭 안에서)
+  const sb = $('sizeBox');
+  const sbMini = () => !!store.get(PREF_KEY, {}).sizeMini;
+  sb.classList.toggle('mini', sbMini());
+  sb.addEventListener('click', () => {
+    const v = !sbMini(); store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), sizeMini: v });
+    sb.classList.toggle('mini', v); if (R.trade) drawSizeBox(posAt(R.trade, R.now));
+  });
+  function drawSizeBox(P) {
+    const tr = R.trade, steps = cumSteps(tr);
+    try { sb.style.right = (chart.priceScale('right').width() + 6) + 'px'; } catch {}
+    const max = steps.length ? Math.max(...steps.map(x => x.q)) : null;
+    $('sbNow').textContent = !P.opened ? '—' : P.closed ? '0%' : P.qty != null ? `${P.qty}%` : '?';
+    $('sbMax').textContent = max != null ? `최대 ${max}%` : '';
+    $('sbNote').textContent = steps.length ? '' : '누적 기록 없음 (10-14 이전 매매)';
+    const cv = $('sbCanvas');
+    if (sb.classList.contains('mini') || !steps.length) { cv.style.display = steps.length && !sb.classList.contains('mini') ? '' : 'none'; return; }
+    cv.style.display = '';
+    const dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 130, h = cv.clientHeight || 38;
+    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    const c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+    const a = tr.events[0].t, b = Math.max(a + 60, tradeEnd(tr));
+    const X = t => 1 + (Math.min(b, Math.max(a, t)) - a) / (b - a) * (w - 2);
+    const top = Math.max(max, 1), Y = q => h - 1 - q / top * (h - 4);
+    const col = tr.side === 'short' ? '255,85,114' : '38,224,165';
+    // 바닥 줄
+    c.strokeStyle = 'rgba(138,154,176,0.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(0, h - 0.5); c.lineTo(w, h - 0.5); c.stroke();
+    // 계단 (지금까지)
+    const pts = steps.filter(p => p.t <= R.now);
+    if (pts.length) {
+      const nowX = X(R.now);
+      c.beginPath(); c.moveTo(X(pts[0].t), Y(0));
+      pts.forEach((p, i) => { c.lineTo(X(p.t), i ? Y(pts[i - 1].q) : Y(0)); c.lineTo(X(p.t), Y(p.q)); });
+      c.lineTo(nowX, Y(pts[pts.length - 1].q)); c.lineTo(nowX, Y(0)); c.closePath();
+      c.fillStyle = `rgba(${col},0.28)`; c.fill();
+      c.beginPath(); c.moveTo(X(pts[0].t), Y(pts[0].q));
+      pts.forEach((p, i) => { if (i) { c.lineTo(X(p.t), Y(pts[i - 1].q)); c.lineTo(X(p.t), Y(p.q)); } });
+      c.lineTo(nowX, Y(pts[pts.length - 1].q));
+      c.strokeStyle = `rgba(${col},0.95)`; c.lineWidth = 1.5; c.stroke();
+    }
+    // 지금 시각
+    const nx = X(R.now);
+    c.strokeStyle = 'rgba(247,147,26,0.8)'; c.lineWidth = 1; c.beginPath(); c.moveTo(nx + 0.5, 0); c.lineTo(nx + 0.5, h); c.stroke();
   }
 
   // 나라면? — 지금 칸(R.step)에 대한 내 판단
@@ -2412,6 +2598,7 @@ const replay = (() => {
   }
 
   $('rbMine').addEventListener('click', openMine);
+  $('rbPrev').addEventListener('click', () => jumpEvent(-1));
   $('rbStep').addEventListener('click', () => { stopPlay(); step(); });
   $('rbNext').addEventListener('click', next);
   $('rbPlay').addEventListener('click', play);
@@ -2419,7 +2606,7 @@ const replay = (() => {
   $('rbBlind').addEventListener('click', toggleBlind);
   $('rbEnd').addEventListener('click', end);
 
-  return { start, end, step, next, play, stopPlay, openMine, pickAt, finish };
+  return { start, end, step, next, play, stopPlay, openMine, pickAt, finish, prev: () => jumpEvent(-1) };
 })();
 
 // 매매 목록
@@ -2433,12 +2620,15 @@ function renderTradeList() {
   }
   $('listBlindChk').checked = listPrefs.blind;
   document.querySelectorAll('#startChips button').forEach(b => b.classList.toggle('on', b.dataset.s === listPrefs.start));
+  const watch = listPrefs.mode === 'watch';
+  $('tradeModal').classList.toggle('m-watch', watch); $('tradeModal').classList.toggle('m-practice', !watch);
+  document.querySelectorAll('#modeChips button').forEach(b => b.classList.toggle('on', b.dataset.m === listPrefs.mode));
   for (const tr of vault.trades) {
     const B = tradeBasics(tr);
     const n = Object.keys(answers.steps(tr.id)).length;
     const li = document.createElement('li');
     const go = document.createElement('button'); go.className = 'trow';
-    const hide = hideAnswer(tr);
+    const hide = !watch && hideAnswer(tr); // 보기 모드는 그대로 보는 것이라 숨기지 않는다
     if (hide) { // 목록 블라인드: 날짜 · 시각 · id · ✍만
       go.classList.add('blind');
       go.innerHTML = `<span class="d">${fmtUtc(tr.events[0].t)}</span><span class="d id">${esc(tr.id)}</span>
@@ -2450,13 +2640,13 @@ function renderTradeList() {
       ${tr.flags.map(f => `<span class="flag">${esc(f)}</span>`).join('')}
       ${tr.confidence === 'low' ? '<span class="flag low">확인 필요</span>' : ''}
       ${n ? `<span class="flag mine">✍ ${n}</span>` : ''}`;
-    go.title = '블라인드 리플레이 시작';
+    go.title = watch ? '보기 리플레이 (그대로 재생)' : '블라인드 리플레이 시작';
     go.addEventListener('click', () => {
       if (!onChart(tr)) { closeModal($('tradeModal')); openCard(tr); toast(`${tr.asset} 매매는 BTC 차트로 리플레이할 수 없습니다 — 원문만 봅니다`, { ms: 3500 }); return; }
       replay.start(tr);
     });
     const see = document.createElement('button'); see.className = 'tbtn';
-    see.textContent = hide ? '답 보기' : '보기'; see.title = '원문·요약 보기';
+    see.textContent = hide ? '답 보기' : '요약'; see.title = '원문·요약 카드';
     see.addEventListener('click', () => {
       if (hide && !confirm(`${tr.id} — 결과가 보입니다. 볼까요?`)) return;
       if (hide) answers.reveal(tr);
@@ -2466,20 +2656,24 @@ function renderTradeList() {
     ul.appendChild(li);
   }
 }
+document.querySelectorAll('#modeChips button').forEach(b => b.addEventListener('click', () => {
+  listPrefs.mode = b.dataset.m; saveListPrefs(); renderTradeList();
+}));
 $('listBlindChk').addEventListener('change', e => { listPrefs.blind = e.target.checked; saveListPrefs(); renderTradeList(); });
 document.querySelectorAll('#startChips button').forEach(b => b.addEventListener('click', () => {
   listPrefs.start = b.dataset.s; saveListPrefs();
   document.querySelectorAll('#startChips button').forEach(x => x.classList.toggle('on', x === b));
 }));
-// 무작위로 하나: 차트에 올릴 수 있는 매매 중 아직 답을 안 적은 것 우선
+// 무작위로 하나: 차트에 올릴 수 있는 매매 중 — 연습은 아직 답을 안 적은 것, 보기는 아직 안 본 것 우선
 $('randomBtn').addEventListener('click', () => {
   const ok = vault.trades.filter(onChart);
   if (!ok.length) { toast('리플레이할 매매가 없습니다', { error: true }); return; }
-  const fresh = ok.filter(tr => !Object.keys(answers.steps(tr.id)).length);
+  const fresh = ok.filter(tr => (listPrefs.mode === 'watch' ? !answers.isRevealed(tr.id) : !Object.keys(answers.steps(tr.id)).length));
   const pool = fresh.length ? fresh : ok;
   replay.start(pool[Math.floor(Math.random() * pool.length)]);
 });
 $('replayBtn').addEventListener('click', () => {
+  if (R.trade && R.mode === 'watch') { replay.end(); renderTradeList(); openModal('tradeModal'); return; } // 보기 중엔 다른 매매 고르기
   if (R.trade) {
     if (R.blind && R.step < R.trade.events.length && !confirm('아직 끝나지 않았습니다 — 나란히 보기를 열면 남은 사건이 다 보입니다. 열까요?')) return;
     replay.finish(); return;
@@ -2697,6 +2891,7 @@ document.addEventListener('keydown', e => {
   if (document.querySelector('.backdrop.show')) return;
   // 리플레이: → 1봉 · Shift+→ 다음 사건 · Space 자동재생
   if (R.trade) {
+    if (R.mode === 'watch' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); if (e.key === 'ArrowRight') replay.next(); else replay.prev(); return; }
     if (e.key === 'ArrowRight') { e.preventDefault(); if (e.shiftKey) replay.next(); else { replay.stopPlay(); replay.step(); } return; }
     if (e.key === ' ') { e.preventDefault(); replay.play(); return; }
   }

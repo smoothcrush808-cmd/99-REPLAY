@@ -9,8 +9,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="리플레이">
-<link rel="apple-touch-icon" href="icon-180.png?v=2">
-<link rel="icon" type="image/png" href="icon-192.png?v=2">
+<link rel="apple-touch-icon" href="icon-180.png?v=3">
+<link rel="icon" type="image/png" href="icon-192.png?v=3">
 <link rel="manifest" href="manifest.webmanifest">
 <title>관점방 리플레이</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -484,6 +484,46 @@
   html.phone-h .backdrop { padding:8px; }
   html.phone-h .panel { padding:14px 16px; }
   html.phone-h .panel > .row.end:last-child { bottom:-14px; margin:8px -16px -14px; padding:8px 16px 10px; }
+
+  /* ───────── 보기 리플레이 (그대로 재생) ───────── */
+  .chips.modes { margin:6px 0 8px; }
+  .chips.modes button { padding:6px 14px; font-size:13px; }
+  .chips.modes button.on { background:var(--btc); color:var(--bg); }
+  #tradeModal.m-watch .only-practice, #tradeModal.m-practice .only-watch { display:none !important; }
+  .rbar.watch #rbMine, .rbar.watch #rbStep, .rbar.watch #rbBlind { display:none; }
+  .rbar:not(.watch) #rbPrev, .rbar:not(.watch) .rb-pos { display:none; }
+  .rb-pos { display:flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; font-family:var(--mono); font-size:13px; color:var(--text-dim); }
+  .rb-pos b { color:var(--text); font-weight:700; }
+  .rb-pos .side { font-weight:700; }
+  .rb-pos .side.long { color:var(--up); } .rb-pos .side.short { color:var(--down); }
+  .rb-pos .cum { color:var(--btc); font-weight:700; font-size:14px; }
+  .rb-pos .u { color:var(--up); } .rb-pos .d { color:var(--down); }
+  .rbar.watch .rb-ev { -webkit-line-clamp:2; display:-webkit-box; -webkit-box-orient:vertical; overflow:hidden; max-height:none; }
+  .rbar.watch .rb-ev:empty { display:none; }
+  .rbar.watch .rb-ev.flash { animation:evflash 1.2s ease; }
+  @keyframes evflash { 0% { background:rgba(247,147,26,0.25); } 100% { background:transparent; } }
+  .sizebox {
+    position:absolute; top:30px; right:64px; z-index:4; width:150px; padding:5px 7px 6px;
+    background:rgba(16,22,31,0.78); border:1px solid rgba(45,66,88,0.7); border-radius:8px;
+    font-family:var(--mono); font-size:11px; color:var(--text-dim); cursor:pointer;
+    -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
+  }
+  .sizebox[hidden] { display:none; }
+  .sb-h { display:flex; align-items:baseline; gap:6px; white-space:nowrap; }
+  .sb-h b { color:var(--btc); font-size:13px; }
+  .sb-max { margin-left:auto; color:var(--text-sub); font-size:10px; }
+  #sbCanvas { display:block; width:100%; height:38px; margin-top:4px; }
+  .sb-note { font-size:10px; color:var(--text-sub); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sb-note:empty { display:none; }
+  .sizebox.mini #sbCanvas, .sizebox.mini .sb-note, .sizebox.mini .sb-max { display:none; }
+  .sizebox.mini { width:auto; }
+  @media (max-width:720px) {
+    .common-note { display:none; }
+    .sizebox { top:28px; right:54px; width:128px; }
+    .rbar.watch { padding:6px 8px; gap:4px; }
+    .rbar.watch .rb-top { font-size:12px; }
+    .rbar.watch .rb-ev { font-size:12px; }
+  }
 </style>
 </head>
 <body>
@@ -547,11 +587,19 @@
       <div class="swatches" id="swatches" hidden></div>
     </div>
     <div class="toast" id="toast"></div>
+    <!-- 보기 리플레이: 비중 상자 (작게 떠 있음, 누르면 접힘) -->
+    <div class="sizebox" id="sizeBox" hidden>
+      <div class="sb-h"><span>비중</span><b id="sbNow"></b><span class="sb-max" id="sbMax"></span></div>
+      <canvas id="sbCanvas"></canvas>
+      <div class="sb-note" id="sbNote"></div>
+    </div>
     <!-- 리플레이 막대 -->
     <div class="rbar" id="rbar" hidden>
       <div class="rb-top"><b id="rbTitle"></b><span class="info" id="rbInfo"></span></div>
+      <div class="rb-pos" id="rbPos"></div>
       <div class="rb-ev" id="rbEvent"></div>
       <div class="rb-btns">
+        <button class="btn" id="rbPrev" title="이전 사건으로 (←)">◀<span class="lbl2">&nbsp;이전</span></button>
         <button class="btn accent" id="rbMine" title="지금 자리에서 내 판단 적기">✍<span class="lbl2">&nbsp;나라면?</span></button>
         <button class="btn" id="rbStep" title="1봉 넘기기 (→)">▶<span class="lbl2">&nbsp;1봉</span></button>
         <button class="btn" id="rbNext" title="다음 사건 열기 (Shift+→)">▶▶<span class="lbl2">&nbsp;다음 사건</span></button>
@@ -663,11 +711,14 @@
 <div class="backdrop" id="tradeModal">
   <div class="panel wide">
     <h3>매매 목록 <span class="count" id="tradeCount">0</span></h3>
-    <p class="sub">하나 고르면 <b>블라인드 리플레이</b>가 시작됩니다 — 고른 시작점부터 「여기까지」 선 앞의 봉·글만 보입니다. 들어갈 자리라고 보이면 언제든 「✍ 여기서 들어간다」, 「다음 사건」을 누를 때마다 그의 실제 행동이 원문과 함께 열립니다.
-      <b>목록 블라인드</b>를 켜 두면 끝까지 본 매매만 방향·결과·꼬리표가 보입니다. 결과 %는 첫 진입가 대비 종료가(<sup>w</sup> = 누적 % 비중 반영), 레버리지는 넣지 않습니다. 꼬리표는 판정이 아니라 표시입니다.</p>
+    <div class="chips modes" id="modeChips"><button data-m="watch">▶ 보기</button><button data-m="practice">✍ 연습</button></div>
+    <p class="sub only-watch"><b>보기</b> — 고르면 진입 10분 전 ~ 종료 10분 뒤를 저절로 재생합니다. 그가 <b>언제 · 얼마나(누적 %)</b> 넣고 덜어내는지 아래 막대와 「비중」 상자에 보이고, 사건마다 잠깐 멈춥니다.</p>
+    <p class="sub only-practice"><b>연습</b> — <b>블라인드 리플레이</b>: 고른 시작점부터 「여기까지」 선 앞의 봉·글만 보입니다. 들어갈 자리라고 보이면 언제든 「✍ 여기서 들어간다」, 「다음 사건」을 누를 때마다 그의 실제 행동이 원문과 함께 열립니다.
+      <b>목록 블라인드</b>를 켜 두면 끝까지 본 매매만 방향·결과·꼬리표가 보입니다.</p>
+    <p class="sub common-note" style="margin-top:-8px">결과 %는 첫 진입가 대비 종료가(<sup>w</sup> = 누적 % 비중 반영), 레버리지는 넣지 않습니다. 꼬리표는 판정이 아니라 표시입니다.</p>
     <div class="tctl">
-      <label class="chk"><input type="checkbox" id="listBlindChk"> 목록 블라인드</label>
-      <div class="r"><span class="lab">시작점</span>
+      <label class="chk only-practice"><input type="checkbox" id="listBlindChk"> 목록 블라인드</label>
+      <div class="r only-practice"><span class="lab">시작점</span>
         <div class="chips" id="startChips"><button data-s="30m">30분 전</button><button data-s="2h">2시간 전</button><button data-s="prev">직전 매매 종료부터</button></div>
       </div>
       <button class="btn accent" id="randomBtn" title="아직 답을 안 적은 매매 중 하나를 골라 바로 시작">🎲 무작위로 하나</button>
@@ -743,6 +794,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=13"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>
