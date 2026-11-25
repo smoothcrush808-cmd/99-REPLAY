@@ -490,8 +490,8 @@
   .chips.modes button { padding:6px 14px; font-size:13px; }
   .chips.modes button.on { background:var(--btc); color:var(--bg); }
   #tradeModal.m-watch .only-practice, #tradeModal.m-practice .only-watch { display:none !important; }
-  .rbar.watch #rbMine, .rbar.watch #rbStep, .rbar.watch #rbBlind { display:none; }
-  .rbar:not(.watch) #rbPrev, .rbar:not(.watch) .rb-pos { display:none; }
+  .rbar.watch #rbMine, .rbar.watch #rbBlind { display:none; }
+  .rbar:not(.watch) #rbPrev, .rbar:not(.watch) #rbNextTrade, .rbar:not(.watch) .rb-pos { display:none; }
   .rb-pos { display:flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; font-family:var(--mono); font-size:13px; color:var(--text-dim); }
   .rb-pos b { color:var(--text); font-weight:700; }
   .rb-pos .side { font-weight:700; }
@@ -523,6 +523,9 @@
     .rbar.watch { padding:6px 8px; gap:4px; }
     .rbar.watch .rb-top { font-size:12px; }
     .rbar.watch .rb-ev { font-size:12px; }
+    .rbar.watch .rb-btns { gap:4px; }
+    .rbar.watch .rb-btns .btn { min-width:38px; padding:6px 6px; }
+    .rbar.watch .rb-btns select { padding:6px 2px; font-size:12px; }
   }
 </style>
 </head>
@@ -601,13 +604,14 @@
       <div class="rb-btns">
         <button class="btn" id="rbPrev" title="이전 사건으로 (←)">◀<span class="lbl2">&nbsp;이전</span></button>
         <button class="btn accent" id="rbMine" title="지금 자리에서 내 판단 적기">✍<span class="lbl2">&nbsp;나라면?</span></button>
-        <button class="btn" id="rbStep" title="1봉 넘기기 (→)">▶<span class="lbl2">&nbsp;1봉</span></button>
+        <button class="btn" id="rbStep" title="1봉 넘기기 (→)"><b>+1</b><span class="lbl2">&nbsp;봉</span></button>
         <button class="btn" id="rbNext" title="다음 사건 열기 (Shift+→)">▶▶<span class="lbl2">&nbsp;다음 사건</span></button>
         <button class="btn" id="rbPlay" title="자동재생 (Space) — 사건 앞에서 멈춤">⏵<span class="lbl2">&nbsp;자동</span></button>
         <select id="rbSpeed" title="자동재생 속도 (봉/초)">
           <option value="1">1봉/초</option><option value="3" selected>3봉/초</option><option value="8">8봉/초</option><option value="20">20봉/초</option>
         </select>
         <button class="btn" id="rbBlind" title="블라인드 켜기/끄기 — 끄면 전체 보기(공부용)">블라인드</button>
+        <button class="btn" id="rbNextTrade" title="다음 매매로">⏭<span class="lbl2">&nbsp;다음 매매</span></button>
         <button class="btn end" id="rbEnd" title="리플레이 끝내기">✕</button>
       </div>
     </div>
@@ -794,6 +798,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=15"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>
