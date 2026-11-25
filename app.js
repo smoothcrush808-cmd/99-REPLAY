@@ -733,7 +733,7 @@ const marks = (() => {
   let on = store.get(PREF_KEY, {}).marks !== false;
   let hits = [];
   let hl = null; // 강조할 사건 {tr, e}
-  let postHits = [], lastH = 0;
+  let postHits = [], lastH = 0, lastW = 9999;
   const KCOL = { signal: '#f7931a', risk: '#ffcc33', view: '#33d4ff', routine: '#5a7088', chat: '#7a93ad', notice: '#ff8ad8' };
 
   // 매매 구간 색칠: 진입~종료를 옅게 (숏 붉게 · 롱 푸르게) + 위쪽 띠 — 축소해도 「여기서 매매했다」가 보이게
@@ -800,7 +800,7 @@ const marks = (() => {
   function tag(ctx, x, y, text, bg, fg, anchor = null) {
     ctx.font = FONT; const w = ctx.measureText(text).width + 8;
     const lh = LH(), bh = lh - 1;
-    const busy = (xx, yy) => placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? bh) + 1 && r.y < yy + lh);
+    const busy = (xx, yy) => (anchor && (xx < 0 || xx + w > lastW - 2)) || placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? bh) + 1 && r.y < yy + lh);
     const xs = anchor ? [Math.round(x), Math.round(anchor.x - 8 - w)] : [Math.round(x)];
     let px = null, py = null;
     for (const xx of xs) {
@@ -856,8 +856,16 @@ const marks = (() => {
       if (x == null || y == null || x < -20 || x > w + 20) continue;
       ctx.save();
       ctx.lineJoin = 'round';
+      const rich = R.mode === 'watch' && tr === R.trade; // 보기 리플레이: 사건마다 가격·누적을 글씨로
+      const cumTxt = Number.isFinite(e.cum) ? ` → ${e.cum}%` : '';
       if (e.type === 'entry') {
         const d = tr.side === 'short' ? 1 : -1; // 숏 ▼ / 롱 ▲
+        if (rich) { // 들어간 봉을 옅은 세로 띠로
+          const bw = Math.max(4, (ts.options().barSpacing || 6) * 0.9);
+          ctx.fillStyle = tr.side === 'short' ? 'rgba(255,85,114,0.16)' : 'rgba(38,224,165,0.16)';
+          ctx.fillRect(x - bw / 2, 0, bw, lastH);
+          labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `진입 ${fmtAxis(price)}${Number.isFinite(e.cum) ? ` · ${e.cum}%` : ''}`, bg: 'rgba(10,14,20,0.88)', fg: sideC, anchor: { x, y } });
+        }
         ctx.fillStyle = sideC; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(x, y + d * 6 * k); ctx.lineTo(x - 7 * k, y - d * 6 * k); ctx.lineTo(x + 7 * k, y - d * 6 * k); ctx.closePath();
         ctx.fill(); ctx.stroke();
@@ -867,7 +875,8 @@ const marks = (() => {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 6 * k, y); ctx.lineTo(x + 6 * k, y); ctx.moveTo(x, y - 6 * k); ctx.lineTo(x, y + 6 * k); ctx.stroke();
         ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
-        if (Number.isFinite(e.cum)) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
+        if (rich) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `추가 ${fmtAxis(price)}${cumTxt}`, bg: 'rgba(10,14,20,0.88)', fg: sideC, anchor: { x, y } });
+        else if (Number.isFinite(e.cum)) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
       } else if (e.type === 'reduce' || e.type === 'tp') {
         if (e.corrected_by) ctx.globalAlpha = 0.45;
         ctx.fillStyle = C.reduce; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
@@ -876,11 +885,13 @@ const marks = (() => {
           : `${e.pct != null ? `${e.pct}%` : Number.isFinite(e.cum) ? `→누적 ${e.cum}%` : '?'}${e.corrected_by ? ' 정정됨' : ''}`;
         // 정정된 사건: 점은 흐리게, 글씨는 진한 바탕 위 흐린 글자로 (캔들 위에서도 읽히게)
         ctx.globalAlpha = 1;
-        labels.push({ x: x + 8 * k, y: y - LH() / 2, text: lab, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
+        const lab2 = rich && e.type === 'reduce' ? `정리 ${fmtAxis(price)}${cumTxt || (e.pct != null ? ` ${e.pct}%` : '')}${e.corrected_by ? ' 정정됨' : ''}` : lab;
+        labels.push({ x: x + 8 * k, y: y - LH() / 2, text: lab2, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         const q = 5 * k; ctx.beginPath(); ctx.moveTo(x - q, y - q); ctx.lineTo(x + q, y + q); ctx.moveTo(x + q, y - q); ctx.lineTo(x - q, y + q); ctx.stroke();
         ctx.strokeStyle = C.exit; ctx.lineWidth = 2.5; ctx.stroke();
+        if (rich) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `종료 ${fmtAxis(price)}`, bg: 'rgba(10,14,20,0.88)', fg: C.exit, anchor: { x, y } });
       }
       if (hl && hl.e === e) {
         ctx.globalAlpha = 1; ctx.strokeStyle = C.btc; ctx.lineWidth = 2; ctx.setLineDash([]);
@@ -890,6 +901,36 @@ const marks = (() => {
       reserve(x, y, 7 * k); // 기호 자리 — 글씨가 덮지 않게
       hits.push({ x, y, tr, e });
     }
+  }
+
+  // 보기 리플레이: 평단 계단 — 진입·추가·정리(·그가 적은 평단) 때마다 바뀐 평단을 그때부터 다음 변화까지, 끝에 「평단 N」
+  function drawAvg(ctx, tr, w) {
+    const pts = [];
+    for (const e of tr.events) {
+      if (!evShown(tr, e) || e.corrected_by) continue;
+      if (e.type === 'exit') { pts.push({ t: e.t, end: true }); break; }
+      if (e.type === 'entry' || e.type === 'add' || e.type === 'reduce' || Number.isFinite(e.avg)) {
+        const P = posAt(tr, e.t);
+        if (P.avg != null && (!pts.length || pts[pts.length - 1].a !== P.avg)) pts.push({ t: e.t, a: P.avg, said: P.said });
+      }
+    }
+    const segs = pts.filter(p => !p.end);
+    if (!segs.length) return;
+    const stopT = pts[pts.length - 1].end ? pts[pts.length - 1].t : R.now;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(230,237,243,0.75)'; ctx.lineWidth = 1.3;
+    let prevY = null;
+    segs.forEach((p, i) => {
+      const t1 = i + 1 < segs.length ? segs[i + 1].t : stopT;
+      const x0 = barX(p.t), x1 = barX(t1), y = series.priceToCoordinate(p.a);
+      if (x0 == null || x1 == null || y == null) { prevY = null; return; }
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(Math.max(x0 + 2, x1), Math.round(y) + 0.5); ctx.stroke();
+      if (prevY != null) { ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, prevY); ctx.lineTo(Math.round(x0) + 0.5, y); ctx.stroke(); }
+      prevY = y;
+      if (i === segs.length - 1) labels.push({ x: Math.min(Math.max(x1, 0) + 4, w - 96 * k), y: y - LH() / 2, text: `평단 ${fmtAxis(p.a)}${p.said ? '(글)' : ''}`, bg: 'rgba(10,14,20,0.88)', fg: '#e6edf3' });
+    });
+    ctx.restore();
   }
 
   // 내 스탑(리플레이 답): 적은 시각부터 다음 답까지 보라 점선
@@ -942,7 +983,7 @@ const marks = (() => {
     placed = []; labels = [];
     // 왼쪽 위 시세 표시(범례) 자리도 글씨가 피한다
     const lg = ui.legend; if (lg.offsetWidth) placed.push({ x: lg.offsetLeft - 2, y: lg.offsetTop - 2, w: lg.offsetWidth + 4, h: lg.offsetHeight + 4 });
-    lastH = h;
+    lastH = h; lastW = w;
     // 고른 글의 시각
     if (panel.selT() != null) { const x = barX(panel.selT()); if (x != null && x >= 0 && x <= w) vline(ctx, x, h, 'rgba(51,212,255,0.55)', [3, 4]); }
     const r = ts.getVisibleLogicalRange();
@@ -956,6 +997,7 @@ const marks = (() => {
       });
       if (on) for (const tr of vis) drawBand(ctx, tr, w, h); // 구간 색칠은 맨 아래
       for (const tr of vis) drawTrade(ctx, tr, w);
+      if (R.mode === 'watch' && R.trade && on) drawAvg(ctx, R.trade, w);
       // 마커 글씨를 먼저(기호 바로 옆 자리 우선), 스탑 글씨는 그다음
       labels.sort((a, b) => (a.anchor ? 0 : 1) - (b.anchor ? 0 : 1));
       flushLabels(ctx);
@@ -2247,6 +2289,7 @@ const replay = (() => {
     R.trade = null; R.draft = null; R.pick = false; R.mode = null;
     bar.classList.remove('watch'); $('sizeBox').hidden = true;
     bar.hidden = true; wrap.classList.remove('replaying');
+    fitMargin(false);
     pushSeries(true, true);
     panel.applyBlind();
     refreshAll(); updateLegend();
@@ -2340,6 +2383,7 @@ const replay = (() => {
 
   function update() {
     if (!R.trade) return;
+    fitMargin(true);
     if (R.mode === 'watch') return updateWatch();
     const tr = R.trade, n = evs().length;
     // 블라인드 리플레이 중엔 방향을 그의 진입 사건이 열릴 때 붙인다 (목록 공개 여부와 상관없이 — 다시 보는 매매도 같음)
@@ -2356,6 +2400,17 @@ const replay = (() => {
     $('rbNext').innerHTML = R.step >= n ? '끝<span class="lbl2">&nbsp;· 나란히 보기</span>' : '▶▶<span class="lbl2">&nbsp;다음 사건</span>';
     $('rbBlind').classList.toggle('on', R.blind);
     $('rbBlind').textContent = R.blind ? '블라인드' : '전체 보기';
+  }
+
+  // 리플레이 막대가 차트 아랫부분을 덮으니, 그만큼 가격축 아래 여백을 둬서 봉·마커가 막대 위에 보이게
+  let marginKey = '';
+  function fitMargin(on) {
+    const ch = $('chart').clientHeight || 1, bh = on ? bar.offsetHeight + 14 : 0;
+    const bottom = on ? Math.min(0.5, Math.max(0.08, bh / ch)) : 0.08;
+    const key = bottom.toFixed(3);
+    if (key === marginKey) return;
+    marginKey = key;
+    series.priceScale().applyOptions({ scaleMargins: { top: 0.08, bottom } });
   }
 
   function updateWatch() {
@@ -2599,6 +2654,15 @@ const replay = (() => {
 
   $('rbMine').addEventListener('click', openMine);
   $('rbPrev').addEventListener('click', () => jumpEvent(-1));
+  // 다음 매매: 시각순으로 그다음(차트에 올릴 수 있는) 매매를 같은 보기 모드로
+  function nextTrade() {
+    if (!R.trade) return;
+    const t0 = R.trade.events[0].t;
+    const nx = vault.trades.find(x => onChart(x) && x !== R.trade && x.events[0].t > t0);
+    if (!nx) { toast('마지막 매매입니다', { ms: 2000 }); return; }
+    start(nx, 'watch');
+  }
+  $('rbNextTrade').addEventListener('click', nextTrade);
   $('rbStep').addEventListener('click', () => { stopPlay(); step(); });
   $('rbNext').addEventListener('click', next);
   $('rbPlay').addEventListener('click', play);
