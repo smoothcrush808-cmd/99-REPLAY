@@ -527,6 +527,52 @@
     .rbar.watch .rb-btns .btn { min-width:38px; padding:6px 6px; }
     .rbar.watch .rb-btns select { padding:6px 2px; font-size:12px; }
   }
+
+  /* ───────── RE 리플레이 전용 화면 (보기) ───────── */
+  .re-top, .re-bot { display:none; }
+  html.re-view .app, html.re-view .app.noside {
+    grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: auto minmax(0, 1fr) auto !important;
+    grid-template-areas: "retop" "chart" "rebot" !important;
+  }
+  html.re-view .top, html.re-view .tools, html.re-view .side, html.re-view .rbar, html.re-view .legend, html.re-view .sizebox { display:none !important; }
+  html.re-view .re-top { display:block; grid-area:retop; padding:6px 8px 4px; border-bottom:1px solid var(--border); }
+  html.re-view .re-bot { display:block; grid-area:rebot; padding:4px 8px calc(8px + var(--safe-b)); border-top:1px solid var(--border); }
+  .re-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; min-width:0; }
+  .re-logo { font-family:var(--display); font-weight:800; color:var(--btc); font-size:16px; letter-spacing:0.5px; }
+  .re-id { font-family:var(--mono); font-weight:600; font-size:14px; }
+  .re-span { font-family:var(--mono); font-size:11.5px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .re-x { margin-left:auto; flex:none; border:1px solid var(--border2); border-radius:8px; padding:5px 11px; color:var(--text-dim); font-size:14px; }
+  .re-cards { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:5px; }
+  .rc { background:var(--bg2); border:1px solid #1e2a38; border-radius:8px; padding:3px 7px 4px; min-width:0; }
+  .rc .k { font-size:10px; color:var(--text-sub); white-space:nowrap; }
+  .rc .v { font-family:var(--mono); font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rc .s { font-family:var(--mono); font-size:10.5px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rc .v.long { color:var(--up); } .rc .v.short { color:var(--down); } .rc .v.u { color:var(--up); } .rc .v.d { color:var(--down); }
+  .re-msg { padding:4px 8px; border-left:3px solid var(--k-risk); background:var(--bg2); border-radius:6px; font-size:12.5px; line-height:1.45;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:2.2em; }
+  .re-msg .t { font-family:var(--mono); font-size:11px; color:var(--k-risk); margin-right:6px; }
+  .re-msg.flash { animation:evflash 1.2s ease; }
+  .re-strip { position:relative; margin-top:4px; }
+  #reStrip { display:block; width:100%; height:40px; }
+  .re-strip-lab { position:absolute; left:4px; bottom:2px; font-size:10px; color:var(--text-sub); pointer-events:none; }
+  .re-seek { position:relative; margin:2px 4px 0; }
+  #reSeek { width:100%; accent-color:var(--btc); height:22px; margin:0; }
+  .re-ticks { position:relative; height:7px; margin:0 8px; }
+  .re-ticks i { position:absolute; top:0; width:3px; height:7px; border-radius:1px; margin-left:-1px; }
+  .re-btns { display:grid; grid-template-columns:1fr 1.1fr 1.5fr 1.1fr 1.5fr; gap:5px; margin-top:5px; }
+  .re-btns2 { display:grid; grid-template-columns:1fr 1fr auto; gap:5px; margin-top:5px; }
+  .re-btns2 select { background:var(--bg2); color:#c8d3df; border:1px solid var(--border2); border-radius:10px; padding:0 6px; font-size:13px; }
+  .re-bot .b { border:1px solid var(--border2); border-radius:10px; padding:8px 0; font-size:14px; color:#c8d3df; background:var(--bg2); white-space:nowrap; }
+  .re-bot .b:active { background:var(--bg3); }
+  .re-bot .b.play { background:var(--btc); color:var(--bg); border-color:var(--btc); font-weight:700; }
+  .re-bot .b.play.on { background:var(--bg3); color:var(--btc); }
+  .re-opts { display:flex; flex-wrap:wrap; gap:2px 14px; align-items:center; margin-top:5px; font-size:12px; color:#c8d3df; }
+  .re-opts select { background:var(--bg); color:var(--text); border:1px solid var(--border2); border-radius:7px; padding:4px 6px; font-size:13px; }
+  .re-opts .chk { margin:0; font-size:12px; color:#c8d3df; }
+  @media (min-width: 721px) {
+    .re-cards { grid-template-columns:repeat(6, minmax(0, 1fr)); }
+    .re-bot .re-msg, .re-bot .re-seek, .re-bot .re-btns, .re-bot .re-btns2, .re-bot .re-opts { max-width:900px; margin-left:auto; margin-right:auto; }
+  }
 </style>
 </head>
 <body>
@@ -616,6 +662,37 @@
       </div>
     </div>
   </main>
+
+  <!-- 보기 리플레이 전용 화면 (html.re-view): 위 숫자 카드 · 아래 글·포지션 띠·슬라이더·조작 -->
+  <section class="re-top" id="reTop">
+    <div class="re-head"><b class="re-logo">RE</b><span class="re-id" id="reId"></span><span class="side-chip" id="reSide"></span><span class="re-span" id="reSpan"></span><button class="re-x" id="reClose" title="리플레이 끝내기">✕</button></div>
+    <div class="re-cards">
+      <div class="rc"><div class="k">시각 (한국)</div><div class="v" id="rcTime"></div><div class="s" id="rcDate"></div></div>
+      <div class="rc"><div class="k">현재가</div><div class="v" id="rcPrice"></div><div class="s">1분봉</div></div>
+      <div class="rc"><div class="k">포지션</div><div class="v" id="rcPos"></div><div class="s" id="rcPosS"></div></div>
+      <div class="rc"><div class="k">평단</div><div class="v" id="rcAvg"></div><div class="s" id="rcAvgS"></div></div>
+      <div class="rc"><div class="k">평가 손익</div><div class="v" id="rcPnl"></div><div class="s" id="rcPnlS"></div></div>
+      <div class="rc"><div class="k">보유</div><div class="v" id="rcHold"></div><div class="s" id="rcHoldS"></div></div>
+    </div>
+  </section>
+  <section class="re-bot" id="reBot">
+    <div class="re-msg" id="reMsg"></div>
+    <div class="re-strip"><canvas id="reStrip"></canvas><span class="re-strip-lab" id="reStripLab">포지션 · 누적 %</span></div>
+    <div class="re-seek"><input type="range" id="reSeek" min="0" max="1" step="60" value="0"><div class="re-ticks" id="reTicks"></div></div>
+    <div class="re-btns">
+      <button class="b" id="reFirst" title="처음으로">⏮</button>
+      <button class="b" id="reBack" title="1봉 뒤로 (←)">−1봉</button>
+      <button class="b play" id="rePlay" title="재생 / 멈춤 (Space)">▶ 재생</button>
+      <button class="b" id="reFwd" title="1봉 앞으로 (→)">+1봉</button>
+      <button class="b" id="reNextEv" title="다음 사건 (Shift+→)">다음 사건</button>
+    </div>
+    <div class="re-btns2"><button class="b" id="rePrevTr">◀ 이전 매매</button><button class="b" id="reNextTr">다음 매매 ▶</button>
+      <select id="reSpeed" title="재생 속도"><option value="1">1초에 1봉</option><option value="2">1초에 2봉</option><option value="3">1초에 3봉</option><option value="5">1초에 5봉</option><option value="10">1초에 10봉</option></select></div>
+    <div class="re-opts">
+      <label class="chk"><input type="checkbox" id="reStopEv" checked> 사건마다 멈춤</label>
+      <label class="chk"><input type="checkbox" id="reFastFlat" checked> 포지션 없을 땐 빨리</label>
+    </div>
+  </section>
 
   <aside class="side" id="side">
     <div class="side-head">
@@ -798,6 +875,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=18"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>
