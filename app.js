@@ -811,6 +811,7 @@ const marks = (() => {
       if (anchor) return 0;             // 마커 글씨: 자리가 없으면 생략
       px = xs[0]; py = Math.round(y);   // 스탑·리플레이 글씨는 그대로 그린다
     }
+    py = Math.max(1, py); // 차트 위 끝에서 잘리지 않게
     placed.push({ x: px, y: py, w });
     if (anchor && (py !== Math.round(y) || px !== xs[0])) {
       ctx.save(); ctx.strokeStyle = fg; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
@@ -845,7 +846,7 @@ const marks = (() => {
       if (x1 - x0 > 70 && x1 > 0 && x0 < w) labels.push({ x: Math.max(x0, 0) + 2, y: y - LH() - 1, text: (s.risk0 ? '리스크0 ' : 'S ') + fmtAxis(s.stop), bg: 'rgba(10,14,20,0.75)', fg: col });
       prevY = y;
     }
-    if (!on) return;
+    if (!on && !(R.mode === 'watch' && tr === R.trade)) return; // 보기 리플레이 중인 매매는 「매매」 끔과 상관없이 늘 그린다
     const coarse = sec() >= 3600; // 1시간봉 이상은 진입·청산만
     for (const e of tr.events) {
       if (!evShown(tr, e) || e.type === 'stop') continue;
@@ -995,9 +996,9 @@ const marks = (() => {
         if (b < lo || a > hi) return false;
         return !(blindOn() && a >= R.now && tr !== R.trade);
       });
-      if (on) for (const tr of vis) drawBand(ctx, tr, w, h); // 구간 색칠은 맨 아래
+      for (const tr of vis) if (on || (R.mode === 'watch' && tr === R.trade)) drawBand(ctx, tr, w, h); // 구간 색칠은 맨 아래
       for (const tr of vis) drawTrade(ctx, tr, w);
-      if (R.mode === 'watch' && R.trade && on) drawAvg(ctx, R.trade, w);
+      if (R.mode === 'watch' && R.trade) drawAvg(ctx, R.trade, w);
       // 마커 글씨를 먼저(기호 바로 옆 자리 우선), 스탑 글씨는 그다음
       labels.sort((a, b) => (a.anchor ? 0 : 1) - (b.anchor ? 0 : 1));
       flushLabels(ctx);
@@ -1009,17 +1010,32 @@ const marks = (() => {
       const x = timeToX(R.now + KST - (R.now + KST) % sec());
       if (x != null && x >= -2 && x <= w + 2) {
         vline(ctx, x, h, R.blind ? C.now : 'rgba(247,147,26,0.45)', R.blind ? null : [6, 4]);
-        tag(ctx, Math.min(x + 3, w - 80 * k), 6, R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
+        tag(ctx, Math.min(x + 3, w - 80 * k), 6, R.mode === 'watch' ? '지금' : R.blind ? '여기까지' : '리플레이 위치', C.now, C.bg);
       }
     }
   }
 
+  // 보기 리플레이: 가격축에 평단(흰) · 지금 걸린 스탑(주황) 숫자표
+  const axisVal = kind => {
+    if (R.mode !== 'watch' || !R.trade) return null;
+    const P = posAt(R.trade, R.now);
+    if (!P.opened || P.closed) return null;
+    if (kind === 'avg') return P.avg || null;
+    const seg = stopSegs(R.trade).filter(s => s.t0 <= R.now).pop();
+    return seg ? seg.stop : null;
+  };
+  const axisTags = [['avg', '#e6edf3', C.bg], ['stop', C.stop, C.bg]].map(([kind, bg, fg]) => ({
+    coordinate: () => { const v = axisVal(kind); return v == null ? -100 : (series.priceToCoordinate(v) ?? -100); },
+    text: () => { const v = axisVal(kind); return v == null ? '' : fmtAxis(v); },
+    textColor: () => fg, backColor: () => bg,
+  }));
   const views = [{ zOrder: () => 'top', renderer: () => ({ draw: tg => tg.useMediaCoordinateSpace(({ context, mediaSize }) => draw(context, mediaSize.width, mediaSize.height)) }) }];
   series.attachPrimitive({
     attached: p => { requestUpdate = p.requestUpdate; },
     detached: () => { requestUpdate = () => {}; },
     updateAllViews: () => {},
     paneViews: () => views,
+    priceAxisViews: () => axisTags,
     // 보이는 구간의 스탑 계단이 화면 밖으로 나가지 않게 가격축 범위에 넣는다
     // 단, 캔들 범위에서 15% 넘게 떨어진 스탑(장부 이상값일 가능성)은 넣지 않는다 — 캔들이 화면 밖으로 밀려나지 않게
     autoscaleInfo: (from, to) => {
@@ -2221,22 +2237,41 @@ const replay = (() => {
     else toast('블라인드 시작 — 들어갈 자리라고 보이면 언제든 「✍ 여기서 들어간다」', { ms: 3500 });
   }
 
-  // ───── 보기 리플레이: 진입 10분 전 ~ 종료 10분 뒤를 저절로 재생, 사건마다 잠깐 멈춤, 묻지 않음
+  // ───── 보기 리플레이 (RE 전용 화면): 진입 30분 전 ~ 종료 30분 뒤, 1분봉 고정, 묻지 않음
+  const html = document.documentElement;
   function startWatch(tr) {
     answers.reveal(tr); // 보는 매매는 연습 목록에서도 공개
+    if (S.iv !== '1m') { if (!R.prevIv) R.prevIv = S.iv; switchInterval('1m'); }
     const first = tr.events[0].t;
-    R.startT = Math.max(Math.floor(klines.startMs() / 1000), Math.floor((first - 600) / 60) * 60);
-    R.endT = tradeEnd(tr) + 600;
+    R.startT = Math.max(Math.floor(klines.startMs() / 1000), Math.floor((first - 1800) / 60) * 60);
+    R.endT = Math.floor((tradeEnd(tr) + 1800) / 60) * 60;
     R.now = R.startT;
     syncStep(false);
     marks.highlight(null);
-    bar.hidden = false; wrap.classList.add('replaying');
-    $('sizeBox').hidden = false;
+    bar.hidden = true; wrap.classList.add('replaying');
+    html.classList.add('re-view');
+    const sk = $('reSeek'); sk.min = R.startT; sk.max = R.endT; sk.value = R.now;
+    $('reTicks').innerHTML = tr.events.map(e => `<i style="left:${((e.t - R.startT) / (R.endT - R.startT) * 100).toFixed(2)}%;background:${
+      e.type === 'entry' || e.type === 'add' ? (tr.side === 'short' ? C.down : C.up) : e.type === 'exit' ? C.exit : e.type === 'stop' ? C.stop : C.reduce}"></i>`).join('');
     pushSeries(true);
     panel.applyBlind();
     update();
-    jumpTo(R.now * 1000, { mark: false, pos: 0.6, width: Math.max(90, Math.min(240, (R.endT - R.startT) / sec() * 0.7)) });
-    setTimeout(() => { if (R.trade === tr && !R.timer) play(); }, 700);
+    jumpTo(R.now * 1000, { mark: false, pos: 0.35, width: Math.max(60, Math.min(150, (R.endT - R.startT) / 60 * 0.6)) });
+  }
+  // 이전·다음 매매 (차트에 올릴 수 있는 매매, 시각순)
+  function siblingTrade(dir) {
+    if (!R.trade) return;
+    const list = vault.trades.filter(onChart), i = list.indexOf(R.trade), nx = list[i + dir];
+    if (!nx) { toast(dir > 0 ? '마지막 매매입니다' : '첫 매매입니다', { ms: 2000 }); return; }
+    stopPlay(); start(nx, 'watch');
+  }
+  // 봉 단위 이동 (−1봉 포함) — 뒤로 가면 그 뒤 사건은 다시 닫힌다
+  async function seekTo(t) {
+    if (!R.trade) return;
+    R.now = Math.max(R.startT, Math.min(R.endT, Math.floor(t / 60) * 60));
+    R.hold = 0;
+    syncStep();
+    await moved();
   }
   // 보기: R.now까지 지난 사건을 연다 (시각 기준 — 뒤로 가기도 된다). 새로 열린 게 있으면 true
   function syncStep(fx = true) {
@@ -2249,13 +2284,21 @@ const replay = (() => {
       const e = list[n - 1];
       if (e.post) panel.select(e.post, { jump: false, scroll: true });
       marks.highlight(R.trade, e);
-      const ev = $('rbEvent'); ev.classList.remove('flash'); void ev.offsetWidth; ev.classList.add('flash');
+      const ev = $('reMsg'); ev.classList.remove('flash'); void ev.offsetWidth; ev.classList.add('flash');
     }
     return grew;
   }
-  async function stepWatch() {
-    const s = sec();
-    const t = Math.floor(R.now / s) * s + s;
+  async function stepWatch(auto = false) {
+    const s = 60;
+    let t = Math.floor(R.now / s) * s + s;
+    // 포지션 없을 땐 빨리: 진입 전·종료 뒤엔 5봉씩 (다음 사건은 넘지 않음)
+    if (auto && $('reFastFlat').checked) {
+      const P = posAt(R.trade, R.now);
+      if (!P.opened || P.closed) {
+        const nx = R.step < evs().length ? evs()[R.step].t : Infinity;
+        t = Math.min(t + 4 * s, Math.max(t, nx));
+      }
+    }
     if (t > R.endT || t * 1000 > klines.endMs() + 60000) {
       stopPlay();
       const B = tradeBasics(R.trade), r = mainResult(B);
@@ -2265,7 +2308,10 @@ const replay = (() => {
     R.now = t;
     const grew = syncStep();
     await moved();
-    if (grew) R.hold = performance.now() + 1600; // 사건마다 잠깐 멈춰 원문을 읽게
+    if (grew && auto) {
+      if ($('reStopEv').checked) { stopPlay(); return false; } // 사건마다 멈춤 — 읽고 ▶로 이어 보기
+      R.hold = performance.now() + 1200;
+    }
     return true;
   }
   async function jumpEvent(dir) {
@@ -2289,7 +2335,9 @@ const replay = (() => {
     R.trade = null; R.draft = null; R.pick = false; R.mode = null;
     bar.classList.remove('watch'); $('sizeBox').hidden = true;
     bar.hidden = true; wrap.classList.remove('replaying');
+    html.classList.remove('re-view');
     fitMargin(false);
+    if (R.prevIv) { const iv = R.prevIv; R.prevIv = null; switchInterval(iv); }
     pushSeries(true, true);
     panel.applyBlind();
     refreshAll(); updateLegend();
@@ -2354,12 +2402,12 @@ const replay = (() => {
 
   function play() {
     if (R.timer) { stopPlay(); return; }
-    const sp = +$('rbSpeed').value || 3;
+    const sp = +(R.mode === 'watch' ? $('reSpeed').value : $('rbSpeed').value) || 1;
     let busy = false;
     R.timer = setInterval(async () => {
       if (busy || (R.hold && performance.now() < R.hold)) return;
       busy = true;
-      try { if (!(await step())) stopPlay(); } finally { busy = false; }
+      try { if (!(await (R.mode === 'watch' ? stepWatch(true) : step()))) stopPlay(); } finally { busy = false; }
     }, 1000 / sp);
     playBtn(true);
   }
@@ -2371,6 +2419,7 @@ const replay = (() => {
   function playBtn(on) {
     const b = $('rbPlay'); b.classList.toggle('on', on);
     b.innerHTML = on ? '⏸<span class="lbl2">&nbsp;멈춤</span>' : `⏵<span class="lbl2">&nbsp;${R.mode === 'watch' ? '재생' : '자동'}</span>`;
+    const p = $('rePlay'); p.textContent = on ? '⏸ 멈춤' : '▶ 재생'; p.classList.toggle('on', on);
   }
 
   function toggleBlind() {
@@ -2414,32 +2463,108 @@ const replay = (() => {
   }
 
   function updateWatch() {
-    const tr = R.trade, n = evs().length, P = posAt(tr, R.now);
-    $('rbTitle').textContent = `${tr.id} ${SIDE_LABEL[tr.side] || ''}`;
-    $('rbInfo').textContent = `${fmtUtc(R.now)} · 사건 ${R.step}/${n}`;
+    const tr = R.trade, n = evs().length, P = posAt(tr, R.now), B = tradeBasics(tr);
+    const bar0 = S.bars[shownLen - 1], cur = bar0 ? bar0.close : null, dir = tr.side === 'short' ? -1 : 1;
+    const first = tr.events[0].t, end = tradeEnd(tr);
+    $('reId').textContent = tr.id;
+    const sc = $('reSide'); sc.className = `side-chip ${tr.side}`; sc.textContent = SIDE_LABEL[tr.side] || '';
+    $('reSpan').textContent = `${fmtUtc(first, false).slice(3)} → ${hhmm(end)}`;
+    const ymd = fmtUtc(R.now); // 24.10.16(수) 15:31
+    $('rcTime').textContent = hhmm(R.now);
+    $('rcDate').textContent = ymd.split(' ')[0];
+    $('rcPrice').textContent = cur != null ? fmtPrice(cur) : '—';
+    const steps = cumSteps(tr), max = steps.length ? Math.max(...steps.map(x => x.q)) : null;
+    const pv = $('rcPos'), side = SIDE_LABEL[tr.side] || '';
+    pv.className = 'v ' + (P.opened && !P.closed ? tr.side : '');
+    pv.textContent = !P.opened ? '진입 전' : P.closed ? '종료' : P.qty != null ? `${side} ${P.qty}%` : side;
+    $('rcPosS').textContent = max == null ? '비중 기록 없음' : [P.lev ? `${P.lev}배` : '', `최대 ${max}%`].filter(Boolean).join(' · ');
+    const open = P.opened && !P.closed;
+    $('rcAvg').textContent = P.opened && P.avg ? fmtPrice(P.avg) : '—';
+    $('rcAvgS').textContent = !P.opened ? '' : P.said ? '그가 적은 값' : B.pos && B.pos.ok ? '누적으로 계산' : '첫 진입가';
+    const pn = $('rcPnl'), mv = open && cur != null && P.avg ? dir * (cur - P.avg) / P.avg * 100 : null;
+    if (open) {
+      pn.className = 'v ' + (mv >= 0 ? 'u' : 'd'); pn.textContent = fmtPct(mv);
+      $('rcPnlS').textContent = P.lev && P.qty ? `시드 ${mv * P.qty / 100 * P.lev >= 0 ? '+' : ''}${(mv * P.qty / 100 * P.lev).toFixed(2)}%p` : '평단 대비 가격';
+    } else if (P.closed) {
+      const r = mainResult(B); pn.className = 'v ' + (r == null ? '' : r >= 0 ? 'u' : 'd'); pn.textContent = r == null ? '—' : fmtPct(r);
+      $('rcPnlS').textContent = B.wresult != null ? '결과 (비중 반영)' : '결과 (첫 진입가→종료)';
+    } else { pn.className = 'v'; pn.textContent = '—'; $('rcPnlS').textContent = ''; }
+    $('rcHold').textContent = P.opened ? fmtDur(Math.min(R.now, P.closed ? end : R.now) - first) : '—';
+    $('rcHoldS').textContent = `사건 ${R.step} / ${n}`;
+    // 글 한 줄: 마지막으로 열린 사건(원문), 없으면 지금까지의 마지막 글
     const last = R.step > 0 ? evs()[R.step - 1] : null;
-    $('rbEvent').innerHTML = last
-      ? `<span class="who">${hhmm(last.t)} ${EV_LABEL[last.type]} ${esc(evDetail(last))}</span>${esc(postText(last.post))}`
-      : '';
-    // 지금 포지션 한 줄: 방향 · 누적 · 평단 · 배율 · 평단 대비 · 보유
-    let h;
-    if (!P.opened) h = '<span>진입 전</span>';
+    if (last) $('reMsg').innerHTML = `<span class="t">${hhmm(last.t)} ${EV_LABEL[last.type]} ${esc(evDetail(last))}</span>${esc(postText(last.post))}`;
     else {
-      const bar0 = S.bars[shownLen - 1], dir = tr.side === 'short' ? -1 : 1;
-      const mv = bar0 && P.avg ? dir * (bar0.close - P.avg) / P.avg * 100 : null;
-      const parts = [`<span class="side ${tr.side}">${SIDE_LABEL[tr.side] || ''}</span>`];
-      parts.push(P.closed ? '<b>종료</b>' : P.qty != null ? `<span class="cum">누적 ${P.qty}%</span>` : '<span>누적 기록 없음</span>');
-      if (!P.closed && P.avg) parts.push(`<span>평단 <b>${fmtAxis(P.avg)}</b>${P.said ? '(글)' : ''}</span>`);
-      if (P.lev) parts.push(`<span>레버 <b>${P.lev}배</b></span>`);
-      if (!P.closed && mv != null) parts.push(`<span class="${mv >= 0 ? 'u' : 'd'}">${fmtPct(mv)}</span>`);
-      if (P.closed) { const r = mainResult(tradeBasics(tr)); if (r != null) parts.push(`<span class="${r >= 0 ? 'u' : 'd'}">결과 ${fmtPct(r)}</span>`); }
-      else parts.push(`<span>${fmtDur(R.now - tr.events[0].t)}</span>`);
-      h = parts.join('');
+      const ps = vault.posts; let k = ps.length - 1; while (k >= 0 && ps[k].t > R.now) k--;
+      $('reMsg').innerHTML = k >= 0 ? `<span class="t">${hhmm(ps[k].t)}</span>${esc(ps[k].photo ? '📷 사진(내보내기에 없음)' : ps[k].text)}` : '';
     }
-    $('rbPos').innerHTML = h;
-    $('rbNext').innerHTML = '▶▶<span class="lbl2">&nbsp;다음</span>';
-    drawSizeBox(P);
+    $('reSeek').value = R.now;
+    drawStrip();
   }
+
+  // 포지션 띠: 차트와 같은 x로 누적 %를 막대로 (지금 시각까지). 숏은 빨강, 롱은 초록
+  function drawStrip() {
+    if (!R.trade || R.mode !== 'watch') return;
+    const tr = R.trade, cv = $('reStrip'), steps = cumSteps(tr);
+    const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) return;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    const c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+    let paneW = w; try { paneW = $('chart').clientWidth - chart.priceScale('right').width(); } catch {}
+    const off = $('chart').getBoundingClientRect().left - cv.getBoundingClientRect().left; // 차트와 x 맞추기
+    const X = t => { const x = barX(t); return x == null ? null : x + off; };
+    c.strokeStyle = 'rgba(138,154,176,0.3)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(off, 0.5); c.lineTo(off + paneW, 0.5); c.stroke();
+    c.font = "600 10.5px 'IBM Plex Mono', monospace"; c.textBaseline = 'top';
+    if (!steps.length) {
+      c.fillStyle = '#5a7088'; c.fillText('비중 기록 없음 (10-14 이전 매매)', Math.max(off, 0) + 6, 12);
+    } else {
+      const max = Math.max(...steps.map(x => x.q), 1), col = tr.side === 'short' ? '255,85,114' : '38,224,165';
+      const pts = steps.filter(p => p.t <= R.now);
+      pts.forEach((p, i) => {
+        const te = i + 1 < pts.length ? pts[i + 1].t : R.now;
+        if (!p.q) return;
+        let x0 = X(p.t), x1 = X(te); if (x0 == null || x1 == null) return;
+        x0 = Math.max(off, x0); x1 = Math.min(off + paneW, Math.max(x0 + 2, x1));
+        if (x1 <= off) return;
+        const bh = p.q / max * (h - 16);
+        c.fillStyle = `rgba(${col},0.5)`; c.fillRect(x0, 1, x1 - x0, bh);
+        c.fillStyle = `rgb(${col})`; c.fillRect(x0, 1 + bh - 1.5, x1 - x0, 1.5);
+        if (x1 - x0 > 22) c.fillText(`${p.q}%`, x0 + 3, Math.min(h - 12, bh + 3));
+      });
+      c.fillStyle = '#8a9ab0'; c.textAlign = 'right';
+      c.fillText(`최대 ${max}%`, off + paneW + Math.min(48, w - off - paneW) - 2, 3); c.textAlign = 'left';
+    }
+    const nx = X(R.now);
+    if (nx != null && nx >= off && nx <= off + paneW) { c.fillStyle = 'rgba(247,147,26,0.85)'; c.fillRect(Math.round(nx), 0, 1.5, h); }
+  }
+  ts.subscribeVisibleLogicalRangeChange(() => { if (R.mode === 'watch') requestAnimationFrame(drawStrip); });
+  window.addEventListener('resize', () => { if (R.mode === 'watch') requestAnimationFrame(drawStrip); });
+
+  // RE 화면 조작
+  $('reClose').addEventListener('click', () => end());
+  $('rePlay').addEventListener('click', () => play());
+  $('reFwd').addEventListener('click', () => { stopPlay(); stepWatch(false); });
+  $('reBack').addEventListener('click', () => { stopPlay(); seekTo(R.now - 60); });
+  $('reFirst').addEventListener('click', () => { stopPlay(); seekTo(R.startT); });
+  $('reNextEv').addEventListener('click', () => { stopPlay(); jumpEvent(1); });
+  $('rePrevTr').addEventListener('click', () => siblingTrade(-1));
+  $('reNextTr').addEventListener('click', () => siblingTrade(1));
+  let seekQueued = false;
+  $('reSeek').addEventListener('input', e => {
+    stopPlay();
+    if (seekQueued) return; seekQueued = true;
+    requestAnimationFrame(async () => { seekQueued = false; await seekTo(+e.target.value); });
+  });
+  const rePrefs = store.get(PREF_KEY, {});
+  $('reSpeed').value = String([1, 2, 3, 5, 10].includes(rePrefs.reSpeed) ? rePrefs.reSpeed : 1);
+  if (rePrefs.reStopEv === false) $('reStopEv').checked = false;
+  if (rePrefs.reFastFlat === false) $('reFastFlat').checked = false;
+  const saveRe = () => store.set(PREF_KEY, { ...store.get(PREF_KEY, {}), reSpeed: +$('reSpeed').value, reStopEv: $('reStopEv').checked, reFastFlat: $('reFastFlat').checked });
+  $('reSpeed').addEventListener('change', () => { saveRe(); if (R.timer) { stopPlay(); play(); } });
+  $('reStopEv').addEventListener('change', saveRe);
+  $('reFastFlat').addEventListener('change', saveRe);
 
   // 비중 상자: 누적 % 계단을 지금 시각까지만 (진입 ~ 종료 폭 안에서)
   const sb = $('sizeBox');
@@ -2670,7 +2795,8 @@ const replay = (() => {
   $('rbBlind').addEventListener('click', toggleBlind);
   $('rbEnd').addEventListener('click', end);
 
-  return { start, end, step, next, play, stopPlay, openMine, pickAt, finish, prev: () => jumpEvent(-1) };
+  return { start, end, step, next, play, stopPlay, openMine, pickAt, finish, prev: () => jumpEvent(-1),
+    fwd: () => stepWatch(false), back: () => seekTo(R.now - 60), seekTo };
 })();
 
 // 매매 목록
@@ -2955,7 +3081,11 @@ document.addEventListener('keydown', e => {
   if (document.querySelector('.backdrop.show')) return;
   // 리플레이: → 1봉 · Shift+→ 다음 사건 · Space 자동재생
   if (R.trade) {
-    if (R.mode === 'watch' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); if (e.key === 'ArrowRight') replay.next(); else replay.prev(); return; }
+    if (R.mode === 'watch' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { // →/← 1봉, Shift면 사건 단위
+      e.preventDefault(); replay.stopPlay();
+      if (e.key === 'ArrowRight') { if (e.shiftKey) replay.next(); else replay.fwd(); } else if (e.shiftKey) replay.prev(); else replay.back();
+      return;
+    }
     if (e.key === 'ArrowRight') { e.preventDefault(); if (e.shiftKey) replay.next(); else { replay.stopPlay(); replay.step(); } return; }
     if (e.key === ' ') { e.preventDefault(); replay.play(); return; }
   }
