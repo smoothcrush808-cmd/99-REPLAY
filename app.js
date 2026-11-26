@@ -782,7 +782,11 @@ const marks = (() => {
   let requestUpdate = () => {};
   // 폰에서는 기호·글씨·점을 1.3배 (손가락·작은 화면) — 그릴 때마다 k를 정한다
   let k = 1, FONT = '';
-  const setScale = () => { k = isPhone() ? 1.3 : 1; FONT = `600 ${(10.5 * k).toFixed(1)}px 'IBM Plex Mono', Menlo, monospace`; };
+  let kf = 1; // 글씨 배율 — RE 화면에선 기호보다 조금 작게 (흐름을 덜 가리게)
+  const setScale = () => {
+    k = isPhone() ? 1.3 : 1; kf = isPhone() ? (R.mode === 'watch' ? 1.1 : 1.3) : 1;
+    FONT = `600 ${(10.5 * kf).toFixed(1)}px 'IBM Plex Mono', Menlo, monospace`;
+  };
   setScale();
 
   function vline(ctx, x, h, color, dash) {
@@ -795,13 +799,13 @@ const marks = (() => {
   let placed = [];
   let labels = []; // 기호를 다 그린 뒤 놓을 글씨
   const SHIFTS = [0, 1, -1, 2, -2, 3, -3]; // 줄 단위 (줄 높이 LH)
-  const LH = () => Math.round(16 * k);
+  const LH = () => Math.round(16 * kf);
   const reserve = (x, y, r) => placed.push({ x: Math.round(x - r), y: Math.round(y - r), w: Math.round(r * 2), h: Math.round(r * 2) });
   function tag(ctx, x, y, text, bg, fg, anchor = null) {
     ctx.font = FONT; const w = ctx.measureText(text).width + 8;
     const lh = LH(), bh = lh - 1;
     const busy = (xx, yy) => (anchor && (xx < 0 || xx + w > lastW - 2)) || placed.some(r => xx < r.x + r.w + 2 && r.x < xx + w + 2 && yy < r.y + (r.h ?? bh) + 1 && r.y < yy + lh);
-    const xs = anchor ? [Math.round(x), Math.round(anchor.x - 8 - w)] : [Math.round(x)];
+    const xs = !anchor ? [Math.round(x)] : anchor.left ? [Math.round(anchor.x - 8 * k - w), Math.round(x)] : [Math.round(x), Math.round(anchor.x - 8 - w)];
     let px = null, py = null;
     for (const xx of xs) {
       const off = SHIFTS.find(d => !busy(xx, y + d * lh));
@@ -865,7 +869,7 @@ const marks = (() => {
           const bw = Math.max(4, (ts.options().barSpacing || 6) * 0.9);
           ctx.fillStyle = tr.side === 'short' ? 'rgba(255,85,114,0.16)' : 'rgba(38,224,165,0.16)';
           ctx.fillRect(x - bw / 2, 0, bw, lastH);
-          labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `진입 ${fmtAxis(price)}${Number.isFinite(e.cum) ? ` · ${e.cum}%` : ''}`, bg: 'rgba(10,14,20,0.88)', fg: sideC, anchor: { x, y } });
+          labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `진입 ${fmtAxis(price)}${Number.isFinite(e.cum) ? ` · ${e.cum}%` : ''}`, bg: 'rgba(10,14,20,0.88)', fg: sideC, anchor: { x, y, left: true } });
         }
         ctx.fillStyle = sideC; ctx.strokeStyle = C.bg; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(x, y + d * 6 * k); ctx.lineTo(x - 7 * k, y - d * 6 * k); ctx.lineTo(x + 7 * k, y - d * 6 * k); ctx.closePath();
@@ -876,7 +880,7 @@ const marks = (() => {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(x - 6 * k, y); ctx.lineTo(x + 6 * k, y); ctx.moveTo(x, y - 6 * k); ctx.lineTo(x, y + 6 * k); ctx.stroke();
         ctx.strokeStyle = sideC; ctx.lineWidth = 2.5; ctx.stroke();
-        if (rich) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `추가 ${fmtAxis(price)}${cumTxt}`, bg: 'rgba(10,14,20,0.88)', fg: sideC, anchor: { x, y } });
+        if (rich) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `추가 ${fmtAxis(price)}${cumTxt}`, bg: 'rgba(10,14,20,0.88)', fg: sideC, anchor: { x, y, left: true } });
         else if (Number.isFinite(e.cum)) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `→누적 ${e.cum}%`, bg: 'rgba(10,14,20,0.85)', fg: sideC, anchor: { x, y } });
       } else if (e.type === 'reduce' || e.type === 'tp') {
         if (e.corrected_by) ctx.globalAlpha = 0.45;
@@ -887,12 +891,12 @@ const marks = (() => {
         // 정정된 사건: 점은 흐리게, 글씨는 진한 바탕 위 흐린 글자로 (캔들 위에서도 읽히게)
         ctx.globalAlpha = 1;
         const lab2 = rich && e.type === 'reduce' ? `정리 ${fmtAxis(price)}${cumTxt || (e.pct != null ? ` ${e.pct}%` : '')}${e.corrected_by ? ' 정정됨' : ''}` : lab;
-        labels.push({ x: x + 8 * k, y: y - LH() / 2, text: lab2, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y } });
+        labels.push({ x: x + 8 * k, y: y - LH() / 2, text: lab2, bg: e.corrected_by ? 'rgba(10,14,20,0.9)' : 'rgba(10,14,20,0.85)', fg: e.corrected_by ? 'rgba(255,204,51,0.6)' : C.reduce, anchor: { x, y, left: rich } });
       } else if (e.type === 'exit') {
         ctx.strokeStyle = C.bg; ctx.lineWidth = 5;
         const q = 5 * k; ctx.beginPath(); ctx.moveTo(x - q, y - q); ctx.lineTo(x + q, y + q); ctx.moveTo(x + q, y - q); ctx.lineTo(x - q, y + q); ctx.stroke();
         ctx.strokeStyle = C.exit; ctx.lineWidth = 2.5; ctx.stroke();
-        if (rich) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `종료 ${fmtAxis(price)}`, bg: 'rgba(10,14,20,0.88)', fg: C.exit, anchor: { x, y } });
+        if (rich) labels.push({ x: x + 9 * k, y: y - LH() / 2, text: `종료 ${fmtAxis(price)}`, bg: 'rgba(10,14,20,0.88)', fg: C.exit, anchor: { x, y, left: true } });
       }
       if (hl && hl.e === e) {
         ctx.globalAlpha = 1; ctx.strokeStyle = C.btc; ctx.lineWidth = 2; ctx.setLineDash([]);
@@ -929,7 +933,6 @@ const marks = (() => {
       ctx.beginPath(); ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(Math.max(x0 + 2, x1), Math.round(y) + 0.5); ctx.stroke();
       if (prevY != null) { ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(Math.round(x0) + 0.5, prevY); ctx.lineTo(Math.round(x0) + 0.5, y); ctx.stroke(); }
       prevY = y;
-      if (i === segs.length - 1) labels.push({ x: Math.min(Math.max(x1, 0) + 4, w - 96 * k), y: y - LH() / 2, text: `평단 ${fmtAxis(p.a)}${p.said ? '(글)' : ''}`, bg: 'rgba(10,14,20,0.88)', fg: '#e6edf3' });
     });
     ctx.restore();
   }
@@ -2256,7 +2259,8 @@ const replay = (() => {
     pushSeries(true);
     panel.applyBlind();
     update();
-    jumpTo(R.now * 1000, { mark: false, pos: 0.35, width: Math.max(60, Math.min(150, (R.endT - R.startT) / 60 * 0.6)) });
+    const paneW = Math.max(200, $('chart').clientWidth - 60);
+    jumpTo(R.now * 1000, { mark: false, pos: 0.5, width: Math.max(45, Math.min(180, Math.round(paneW / 6))) });
   }
   // 이전·다음 매매 (차트에 올릴 수 있는 매매, 시각순)
   function siblingTrade(dir) {
@@ -2531,7 +2535,8 @@ const replay = (() => {
         const bh = p.q / max * (h - 16);
         c.fillStyle = `rgba(${col},0.5)`; c.fillRect(x0, 1, x1 - x0, bh);
         c.fillStyle = `rgb(${col})`; c.fillRect(x0, 1 + bh - 1.5, x1 - x0, 1.5);
-        if (x1 - x0 > 22) c.fillText(`${p.q}%`, x0 + 3, Math.min(h - 12, bh + 3));
+        const lx = Math.max(x0, 0) + 3; // 막대가 화면 왼쪽 밖에서 시작해도 숫자는 안에
+        if (x1 - lx > 22) c.fillText(`${p.q}%`, lx, Math.min(h - 12, bh + 3));
       });
       c.fillStyle = '#8a9ab0'; c.textAlign = 'right';
       c.fillText(`최대 ${max}%`, off + paneW + Math.min(48, w - off - paneW) - 2, 3); c.textAlign = 'left';
