@@ -554,7 +554,7 @@
   .re-msg.flash { animation:evflash 1.2s ease; }
   .re-strip { position:relative; margin-top:4px; }
   #reStrip { display:block; width:100%; height:40px; }
-  .re-strip-lab { position:absolute; left:4px; bottom:2px; font-size:10px; color:var(--text-sub); pointer-events:none; }
+  .re-strip-lab { position:absolute; right:4px; bottom:2px; font-size:10px; color:var(--text-sub); pointer-events:none; }
   .re-seek { position:relative; margin:2px 4px 0; }
   #reSeek { width:100%; accent-color:var(--btc); height:22px; margin:0; }
   .re-ticks { position:relative; height:7px; margin:0 8px; }
@@ -677,7 +677,7 @@
   </section>
   <section class="re-bot" id="reBot">
     <div class="re-msg" id="reMsg"></div>
-    <div class="re-strip"><canvas id="reStrip"></canvas><span class="re-strip-lab" id="reStripLab">포지션 · 누적 %</span></div>
+    <div class="re-strip"><canvas id="reStrip"></canvas><span class="re-strip-lab" id="reStripLab">누적 %</span></div>
     <div class="re-seek"><input type="range" id="reSeek" min="0" max="1" step="60" value="0"><div class="re-ticks" id="reTicks"></div></div>
     <div class="re-btns">
       <button class="b" id="reFirst" title="처음으로">⏮</button>
@@ -875,6 +875,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@5.1.0/dist/lightweight-charts.standalone.production.js"></script>
 <!-- 고칠 때마다 v를 올린다: 배포 직후 브라우저가 옛 app.js를 쓰지 않도록 -->
-<script src="app.js?v=21"></script>
+<script src="app.js?v=24"></script>
 </body>
 </html>
